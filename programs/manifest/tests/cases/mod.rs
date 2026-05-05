@@ -7,6 +7,7 @@ pub mod exploit_global_clean;
 pub mod exploit_global_reduce;
 pub mod global;
 pub mod loaders;
+pub mod magicblock;
 pub mod matching;
 pub mod place_order;
 pub mod reverse;

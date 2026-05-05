@@ -217,13 +217,21 @@ pub(crate) fn process_create_market(
         }
     }
 
-    // Setup the empty market.
-    let empty_market_fixed: MarketFixed =
-        MarketFixed::new_empty(&base_mint, &quote_mint, market.info.key, market_id, authority);
-    assert_eq!(market.info.data_len(), size_of::<MarketFixed>());
+    // Setup the empty market — scoped so the mutable borrow drops before we
+    // re-open the account as a ManifestAccountInfo.
+    {
+        let empty_market_fixed: MarketFixed = MarketFixed::new_empty(
+            &base_mint,
+            &quote_mint,
+            market.info.key,
+            market_id,
+            authority,
+        );
+        assert_eq!(market.info.data_len(), size_of::<MarketFixed>());
 
-    let market_bytes: &mut [u8] = &mut market.info.try_borrow_mut_data()?[..];
-    *get_mut_helper::<MarketFixed>(market_bytes, 0_u32) = empty_market_fixed;
+        let mut market_data = market.info.try_borrow_mut_data()?;
+        *get_mut_helper::<MarketFixed>(&mut market_data, 0_u32) = empty_market_fixed;
+    }
 
     emit_stack(CreateMarketLog {
         market: *market.info.key,

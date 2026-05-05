@@ -23,6 +23,8 @@ import {
 } from '@solana/web3.js';
 import {
   createMint,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
@@ -33,6 +35,7 @@ import * as path from 'path';
 import BN from 'bn.js';
 
 import {
+  createBatchUpdateInstruction,
   createCommitAndUndelegateMarketInstruction,
   createCommitMarketInstruction,
   createCreateMarketInstruction,
@@ -40,6 +43,7 @@ import {
   createUndelegateMarketInstruction,
 } from '../src/manifest/instructions';
 import { createClaimSeatInstruction } from '../src/manifest/instructions/ClaimSeat';
+import { OrderType } from '../src/manifest/types/OrderType';
 import { getMarketAddress, getVaultAddress } from '../src/utils/market';
 import {
   isDelegated,
@@ -167,6 +171,104 @@ describe('Manifest × MagicBlock — devnet E2E', function () {
     record('ClaimSeat', sig);
   });
 
+  let traderQuoteAta: PublicKey;
+  let traderBaseAta: PublicKey;
+
+  it('Mint test tokens + Deposit on base layer (must happen before delegate)', async () => {
+    // Pre-flight: trader needs an ATA + a mint for each side, and the
+    // market vaults need to be funded so seat balances are credited.
+    const baseAcct = await getOrCreateAssociatedTokenAccount(
+      baseConn,
+      payer,
+      baseMint,
+      payer.publicKey,
+    );
+    const quoteAcct = await getOrCreateAssociatedTokenAccount(
+      baseConn,
+      payer,
+      quoteMint,
+      payer.publicKey,
+    );
+    traderBaseAta = baseAcct.address;
+    traderQuoteAta = quoteAcct.address;
+
+    await mintTo(
+      baseConn,
+      payer,
+      baseMint,
+      traderBaseAta,
+      payer,
+      1_000_000_000_000n,
+    );
+    await mintTo(
+      baseConn,
+      payer,
+      quoteMint,
+      traderQuoteAta,
+      payer,
+      1_000_000_000_000n,
+    );
+
+    // Build ix data manually because the solita-generated DepositStruct has
+    // a stale duplicate `traderIndexHint` field. Rust expects only:
+    //   [discriminator u8][amount_atoms u64 LE][trader_index_hint COption<u32>]
+    function depositIxData(amount: bigint): Buffer {
+      const buf = Buffer.alloc(1 + 8 + 1);
+      buf.writeUInt8(2, 0); // Deposit discriminator
+      buf.writeBigUInt64LE(amount, 1);
+      buf.writeUInt8(0, 9); // None for trader_index_hint
+      return buf;
+    }
+
+    const buildDepositIx = (
+      mint: PublicKey,
+      vault: PublicKey,
+      traderToken: PublicKey,
+      amount: bigint,
+    ) =>
+      new (require('@solana/web3.js').TransactionInstruction)({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+          { pubkey: market, isSigner: false, isWritable: true },
+          { pubkey: traderToken, isSigner: false, isWritable: true },
+          { pubkey: vault, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: mint, isSigner: false, isWritable: false },
+        ],
+        data: depositIxData(amount),
+      });
+
+    const depositBaseIx = buildDepositIx(
+      baseMint,
+      getVaultAddress(market, baseMint),
+      traderBaseAta,
+      100_000_000_000n,
+    );
+    const depositQuoteIx = buildDepositIx(
+      quoteMint,
+      getVaultAddress(market, quoteMint),
+      traderQuoteAta,
+      100_000_000_000n,
+    );
+
+    const sigBase = await sendAndConfirmTransaction(
+      baseConn,
+      new Transaction().add(depositBaseIx),
+      [payer],
+      { commitment: 'confirmed' },
+    );
+    record('Deposit (base side)', sigBase);
+
+    const sigQuote = await sendAndConfirmTransaction(
+      baseConn,
+      new Transaction().add(depositQuoteIx),
+      [payer],
+      { commitment: 'confirmed' },
+    );
+    record('Deposit (quote side)', sigQuote);
+  });
+
   it('DelegateMarket — base layer (CPIs to delegation program)', async () => {
     expect(await isDelegated(baseConn, market)).to.equal(false);
 
@@ -185,6 +287,82 @@ describe('Manifest × MagicBlock — devnet E2E', function () {
     await new Promise((r) => setTimeout(r, 3000));
     const owned = await isDelegated(baseConn, market);
     console.log(`  market.owner now delegation-program? ${owned}`);
+  });
+
+  it('BatchUpdate place — ER, posts a bid + an ask', async () => {
+    const ix = createBatchUpdateInstruction(
+      { payer: payer.publicKey, market },
+      {
+        params: {
+          traderIndexHint: null,
+          cancels: [],
+          orders: [
+            {
+              baseAtoms: new BN('1000000000'), // 1 base unit
+              priceMantissa: 100,
+              priceExponent: -2, // price 1.00 quote per base
+              isBid: true,
+              lastValidSlot: 0,
+              orderType: OrderType.Limit,
+            },
+            {
+              baseAtoms: new BN('1000000000'),
+              priceMantissa: 105,
+              priceExponent: -2, // 1.05
+              isBid: false,
+              lastValidSlot: 0,
+              orderType: OrderType.Limit,
+            },
+          ],
+        },
+      },
+    );
+
+    const tx = new Transaction().add(ix);
+    tx.feePayer = payer.publicKey;
+    const { blockhash } = await erConn.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.sign(payer);
+    const t0 = Date.now();
+    const sig = await erConn.sendRawTransaction(tx.serialize(), {
+      skipPreflight: true,
+    });
+    const sentAt = Date.now() - t0;
+    record(`BatchUpdate place (ER, ${sentAt}ms send)`, sig);
+  });
+
+  it('BatchUpdate cancel — ER, cancels both orders by sequence number', async () => {
+    // Latest market state on the ER. Read from ER endpoint, not base.
+    await new Promise((r) => setTimeout(r, 1500)); // allow place to settle
+    const acct = await erConn.getAccountInfo(market);
+    expect(acct, 'market visible on ER').to.not.be.null;
+
+    // Sequence numbers 0 and 1 (first two orders placed).
+    const ix = createBatchUpdateInstruction(
+      { payer: payer.publicKey, market },
+      {
+        params: {
+          traderIndexHint: null,
+          cancels: [
+            { orderSequenceNumber: new BN(0), orderIndexHint: null },
+            { orderSequenceNumber: new BN(1), orderIndexHint: null },
+          ],
+          orders: [],
+        },
+      },
+    );
+
+    const tx = new Transaction().add(ix);
+    tx.feePayer = payer.publicKey;
+    const { blockhash } = await erConn.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.sign(payer);
+    const t0 = Date.now();
+    const sig = await erConn.sendRawTransaction(tx.serialize(), {
+      skipPreflight: true,
+    });
+    const sentAt = Date.now() - t0;
+    record(`BatchUpdate cancel (ER, ${sentAt}ms send)`, sig);
   });
 
   it('CommitAndUndelegateMarket — ER side', async () => {

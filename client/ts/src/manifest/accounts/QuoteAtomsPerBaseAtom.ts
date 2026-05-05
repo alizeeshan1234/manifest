@@ -76,7 +76,7 @@ export class QuoteAtomsPerBaseAtom implements QuoteAtomsPerBaseAtomArgs {
    */
   static gpaBuilder(
     programId: web3.PublicKey = new web3.PublicKey(
-      'MNFSTqtC93rEfYHB6hF82sKdZpUDFWkViLByLd1k1Ms',
+      '3nqmFMjrw829a88AU3vSnr4BGraKp1pd8jtLnibeCNnw',
     ),
   ) {
     return beetSolana.GpaBuilder.fromStruct(

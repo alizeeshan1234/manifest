@@ -96,7 +96,7 @@ security_txt! {
 // transaction limit before an attacker is able to clear a substantial number of
 // seats in one transaction.
 
-declare_id!("MNFSTqtC93rEfYHB6hF82sKdZpUDFWkViLByLd1k1Ms");
+declare_id!("3nqmFMjrw829a88AU3vSnr4BGraKp1pd8jtLnibeCNnw");
 
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(process_instruction);
@@ -106,6 +106,24 @@ pub fn process_instruction(
     accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    // The MagicBlock delegation program calls back into our program with this
+    // 8-byte Anchor-style discriminator after a commit-and-undelegate has
+    // been scheduled. Handle it before falling through to single-byte
+    // dispatch.
+    if instruction_data.len() >= 8
+        && instruction_data[..8] == magicblock::consts::EXTERNAL_UNDELEGATE_DISCRIMINATOR
+    {
+        // Tail of ix data is borsh-serialized Vec<Vec<u8>> account_seeds.
+        let account_seeds: Vec<Vec<u8>> =
+            borsh::BorshDeserialize::try_from_slice(&instruction_data[8..])
+                .map_err(|_| ProgramError::InvalidInstructionData)?;
+        return program::undelegate_market::process_undelegate_market_with_seeds(
+            program_id,
+            accounts,
+            account_seeds,
+        );
+    }
+
     let (tag, data) = instruction_data
         .split_first()
         .ok_or(ProgramError::InvalidInstructionData)?;

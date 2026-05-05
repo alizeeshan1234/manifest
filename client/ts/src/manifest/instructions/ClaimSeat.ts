@@ -43,7 +43,7 @@ export const claimSeatInstructionDiscriminator = 1;
  */
 export function createClaimSeatInstruction(
   accounts: ClaimSeatInstructionAccounts,
-  programId = new web3.PublicKey('MNFSTqtC93rEfYHB6hF82sKdZpUDFWkViLByLd1k1Ms'),
+  programId = new web3.PublicKey('3nqmFMjrw829a88AU3vSnr4BGraKp1pd8jtLnibeCNnw'),
 ) {
   const [data] = ClaimSeatStruct.serialize({
     instructionDiscriminator: claimSeatInstructionDiscriminator,

@@ -1,10 +1,15 @@
-//! UndelegateMarket — base-layer finalization step after the ER has
-//! called `CommitAndUndelegateMarket`. Recreates the market PDA owned
-//! by Manifest and copies the buffered state back into it.
+//! UndelegateMarket — finalization callback.
 //!
-//! Seeds are reconstructed by reading the `base_mint`, `quote_mint`,
-//! and `market_id` fields directly out of the buffered account data
-//! at the byte offsets defined by `MarketFixed`.
+//! There are two entry points:
+//!
+//!   1. `process_undelegate_market` — the legacy single-byte dispatch path
+//!      (`ManifestInstruction::UndelegateMarket = 17`). Reconstructs PDA
+//!      seeds by reading mint offsets from the buffered account data. Useful
+//!      for diagnostics and direct CLI invocation.
+//!   2. `process_undelegate_market_with_seeds` — the canonical path. Called
+//!      automatically by the MagicBlock delegation program via the 8-byte
+//!      `EXTERNAL_UNDELEGATE_DISCRIMINATOR` after `CommitAndUndelegate` runs
+//!      on the ER. Seeds are passed in as ix data; the buffer is signer.
 
 use solana_program::{
     account_info::{next_account_info, AccountInfo},
@@ -14,16 +19,38 @@ use solana_program::{
 
 use crate::magicblock::cpi::undelegate_account;
 
-// Byte offsets inside MarketFixed:
-//   discriminant       u64    @ 0
-//   version, decimals... 8 bytes @ 8
-//   base_mint          [u8;32]@ 16
-//   quote_mint         [u8;32]@ 48
 const BASE_MINT_OFFSET: usize = 16;
 const QUOTE_MINT_OFFSET: usize = 48;
-// market_id sits at offset 13 (after the five u8 fields starting at offset 8).
 const MARKET_ID_OFFSET: usize = 13;
 
+/// Canonical entry point. Called by the delegation program with seeds
+/// already serialized into the ix data.
+pub fn process_undelegate_market_with_seeds(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    account_seeds: Vec<Vec<u8>>,
+) -> ProgramResult {
+    // Anchor-style account order from generate_undelegate macro:
+    //   [base_account, buffer, payer, system_program]
+    let account_iter = &mut accounts.iter();
+    let delegated_account = next_account_info(account_iter)?;
+    let buffer_info = next_account_info(account_iter)?;
+    let payer_info = next_account_info(account_iter)?;
+    let system_program_info = next_account_info(account_iter)?;
+
+    undelegate_account(
+        delegated_account,
+        program_id,
+        buffer_info,
+        payer_info,
+        system_program_info,
+        account_seeds,
+    )?;
+    Ok(())
+}
+
+/// Legacy single-byte dispatch path. Reconstructs seeds from the buffered
+/// data instead of receiving them in the ix data.
 pub(crate) fn process_undelegate_market(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -35,9 +62,6 @@ pub(crate) fn process_undelegate_market(
     let payer_info = next_account_info(account_iter)?;
     let system_program_info = next_account_info(account_iter)?;
 
-    // Read seeds out of the buffered state. After CommitAndUndelegate, the
-    // delegation buffer holds the latest market bytes; the on-chain market
-    // account itself is owned by the delegation program.
     let pda_seeds: Vec<Vec<u8>> = {
         let data = buffer_info.try_borrow_data()?;
         let base_mint = Pubkey::new_from_array(

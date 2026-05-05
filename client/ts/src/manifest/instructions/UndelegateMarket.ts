@@ -25,7 +25,7 @@ export type UndelegateMarketAccounts = {
 export function createUndelegateMarketInstruction(
   accounts: UndelegateMarketAccounts,
   programId: web3.PublicKey = new web3.PublicKey(
-    'MNFSTqtC93rEfYHB6hF82sKdZpUDFWkViLByLd1k1Ms',
+    '3nqmFMjrw829a88AU3vSnr4BGraKp1pd8jtLnibeCNnw',
   ),
 ): web3.TransactionInstruction {
   const [data] = UndelegateMarketStruct.serialize({

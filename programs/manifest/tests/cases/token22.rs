@@ -51,12 +51,12 @@ async fn token22_base() -> anyhow::Result<()> {
 
     // Create the market with SPL as base which is 2022, USDC as quote which is normal.
     let create_market_ixs: Vec<Instruction> = create_market_instructions(
-        &market_keypair.pubkey(),
         &spl_mint_f.key,
         &usdc_mint_f.key,
         payer,
-    )
-    .unwrap();
+        0,
+        &solana_sdk::pubkey::Pubkey::default(),
+    );
     send_tx_with_retry(
         Rc::clone(&context),
         &create_market_ixs[..],
@@ -333,12 +333,12 @@ async fn token22_quote() -> anyhow::Result<()> {
 
     // Create the market with SPL as base which is normal, USDC as quote which is 2022.
     let create_market_ixs: Vec<Instruction> = create_market_instructions(
-        &market_keypair.pubkey(),
         &spl_mint_f.key,
         &usdc_mint_f.key,
         payer,
-    )
-    .unwrap();
+        0,
+        &solana_sdk::pubkey::Pubkey::default(),
+    );
     send_tx_with_retry(
         Rc::clone(&context),
         &create_market_ixs[..],
@@ -638,12 +638,12 @@ async fn token22_deposit_transfer_fee() -> anyhow::Result<()> {
 
     // Create the market with SPL as base which is 2022, USDC as quote which is normal.
     let create_market_ixs: Vec<Instruction> = create_market_instructions(
-        &market_keypair.pubkey(),
         &spl_mint_key,
         &usdc_mint_f.key,
         payer,
-    )
-    .unwrap();
+        0,
+        &solana_sdk::pubkey::Pubkey::default(),
+    );
     send_tx_with_retry(
         Rc::clone(&context),
         &create_market_ixs[..],
@@ -817,12 +817,12 @@ async fn token22_transfer_fee_epoch_switching() -> anyhow::Result<()> {
 
     // Create market
     let create_market_ixs: Vec<Instruction> = create_market_instructions(
-        &market_keypair.pubkey(),
         &spl_mint_key,
         &usdc_mint_f.key,
         payer,
-    )
-    .unwrap();
+        0,
+        &solana_sdk::pubkey::Pubkey::default(),
+    );
     send_tx_with_retry(
         Rc::clone(&context),
         &create_market_ixs[..],
@@ -1133,12 +1133,12 @@ async fn token22_transfer_fee_older_epoch() -> anyhow::Result<()> {
 
     // Create market (still at epoch 0, so 0% fee should apply)
     let create_market_ixs: Vec<Instruction> = create_market_instructions(
-        &market_keypair.pubkey(),
         &spl_mint_key,
         &usdc_mint_f.key,
         payer,
-    )
-    .unwrap();
+        0,
+        &solana_sdk::pubkey::Pubkey::default(),
+    );
     send_tx_with_retry(
         Rc::clone(&context),
         &create_market_ixs[..],
@@ -1322,12 +1322,12 @@ async fn token22_transfer_fee_zero_to_nonzero() -> anyhow::Result<()> {
 
     // Create market
     let create_market_ixs: Vec<Instruction> = create_market_instructions(
-        &market_keypair.pubkey(),
         &spl_mint_key,
         &usdc_mint_f.key,
         payer,
-    )
-    .unwrap();
+        0,
+        &solana_sdk::pubkey::Pubkey::default(),
+    );
     send_tx_with_retry(
         Rc::clone(&context),
         &create_market_ixs[..],

@@ -96,12 +96,12 @@ impl TestFixture {
         let payer_pubkey: Pubkey = context.borrow().payer.pubkey();
         let payer: Keypair = context.borrow().payer.insecure_clone();
         let create_market_ixs: Vec<Instruction> = create_market_instructions(
-            &market_keypair.pubkey(),
-            &sol_mint_f.key,
-            &usdc_mint_f.key,
-            &payer_pubkey,
-        )
-        .unwrap();
+        &sol_mint_f.key,
+        &usdc_mint_f.key,
+        &payer_pubkey,
+        0,
+        &solana_sdk::pubkey::Pubkey::default(),
+    );
 
         send_tx_with_retry(
             Rc::clone(&context),
@@ -423,7 +423,13 @@ impl MarketFixture {
             context: context_ref,
             key,
             market: MarketValue {
-                fixed: MarketFixed::new_empty(&base_mint, &quote_mint, &key),
+                fixed: MarketFixed::new_empty(
+                    &base_mint,
+                    &quote_mint,
+                    &key,
+                    0,
+                    solana_sdk::pubkey::Pubkey::default(),
+                ),
                 dynamic: Vec::new(),
             },
         }

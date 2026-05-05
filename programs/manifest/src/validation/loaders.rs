@@ -17,15 +17,17 @@ use crate::{
     },
 };
 
-use super::{get_vault_address, ManifestAccountInfo, TokenProgram};
+use super::{get_market_address, get_vault_address, ManifestAccountInfo, TokenProgram};
 
 #[cfg(feature = "certora")]
 use early_panic::early_panic;
 
-/// CreateMarket account infos
+/// CreateMarket account infos. The `market` is now a PDA at
+/// [b"market", base_mint, quote_mint, market_id]. It is passed in as an
+/// uninitialized system account; this instruction creates it.
 pub(crate) struct CreateMarketContext<'a, 'info> {
     pub payer: Signer<'a, 'info>,
-    pub market: ManifestAccountInfo<'a, 'info, MarketFixed>,
+    pub market: EmptyAccount<'a, 'info>,
     pub base_mint: MintAccountInfo<'a, 'info>,
     pub quote_mint: MintAccountInfo<'a, 'info>,
     pub base_vault: EmptyAccount<'a, 'info>,
@@ -36,12 +38,14 @@ pub(crate) struct CreateMarketContext<'a, 'info> {
 }
 
 impl<'a, 'info> CreateMarketContext<'a, 'info> {
-    pub fn load(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
+    pub fn load(
+        accounts: &'a [AccountInfo<'info>],
+        market_id: u8,
+    ) -> Result<Self, ProgramError> {
         let account_iter: &mut Iter<AccountInfo<'info>> = &mut accounts.iter();
 
         let payer: Signer = Signer::new_payer(next_account_info(account_iter)?)?;
-        let market: ManifestAccountInfo<MarketFixed> =
-            ManifestAccountInfo::<MarketFixed>::new_init(next_account_info(account_iter)?)?;
+        let market: EmptyAccount = EmptyAccount::new(next_account_info(account_iter)?)?;
         let system_program: Program =
             Program::new(next_account_info(account_iter)?, &system_program::id())?;
         let base_mint: MintAccountInfo = MintAccountInfo::new(next_account_info(account_iter)?)?;
@@ -49,10 +53,19 @@ impl<'a, 'info> CreateMarketContext<'a, 'info> {
         let base_vault: EmptyAccount = EmptyAccount::new(next_account_info(account_iter)?)?;
         let quote_vault: EmptyAccount = EmptyAccount::new(next_account_info(account_iter)?)?;
 
+        // Verify the market account is at the expected PDA.
+        let (expected_market_key, _market_bump) =
+            get_market_address(base_mint.info.key, quote_mint.info.key, market_id);
+        require!(
+            expected_market_key == *market.info.key,
+            ManifestError::IncorrectAccount,
+            "Market account is not at expected PDA address",
+        )?;
+
         let (expected_base_vault, _base_vault_bump) =
-            get_vault_address(market.key, base_mint.info.key);
+            get_vault_address(market.info.key, base_mint.info.key);
         let (expected_quote_vault, _quote_vault_bump) =
-            get_vault_address(market.key, quote_mint.info.key);
+            get_vault_address(market.info.key, quote_mint.info.key);
 
         require!(
             expected_base_vault == *base_vault.info.key,

@@ -264,22 +264,33 @@ impl TestFixture {
         base_mint: &Pubkey,
         quote_mint: &Pubkey,
     ) -> anyhow::Result<Pubkey, BanksClientError> {
-        let market_keypair: Keypair = Keypair::new();
         let payer: Pubkey = self.context.borrow().payer.pubkey();
         let payer_keypair: Keypair = self.context.borrow().payer.insecure_clone();
 
-        let create_market_ixs: Vec<Instruction> =
-            create_market_instructions(&market_keypair.pubkey(), base_mint, quote_mint, &payer)
-                .unwrap();
+        let market_id: u8 = 0;
+        let authority: Pubkey = manifest::validation::get_market_address(
+            base_mint, quote_mint, market_id,
+        )
+        .0; // not used for delegation in tests; placeholder
+        let _ = authority;
+        let create_market_ixs: Vec<Instruction> = create_market_instructions(
+            base_mint,
+            quote_mint,
+            &payer,
+            market_id,
+            &solana_sdk::pubkey::Pubkey::default(),
+        );
+        let (market_pda, _) =
+            manifest::validation::get_market_address(base_mint, quote_mint, market_id);
 
         send_tx_with_retry(
             Rc::clone(&self.context),
             &create_market_ixs[..],
             Some(&payer),
-            &[&payer_keypair, &market_keypair],
+            &[&payer_keypair],
         )
         .await?;
-        Ok(market_keypair.pubkey())
+        Ok(market_pda)
     }
 
     pub async fn claim_seat(&self) -> anyhow::Result<(), BanksClientError> {
@@ -809,18 +820,24 @@ impl MarketFixture {
         base_mint: &Pubkey,
         quote_mint: &Pubkey,
     ) -> Self {
-        let market_keypair: Keypair = Keypair::new();
         let payer: Pubkey = context.borrow().payer.pubkey();
         let payer_keypair: Keypair = context.borrow().payer.insecure_clone();
-        let create_market_ixs: Vec<Instruction> =
-            create_market_instructions(&market_keypair.pubkey(), base_mint, quote_mint, &payer)
-                .unwrap();
+        let market_id: u8 = 0;
+        let create_market_ixs: Vec<Instruction> = create_market_instructions(
+            base_mint,
+            quote_mint,
+            &payer,
+            market_id,
+            &solana_sdk::pubkey::Pubkey::default(),
+        );
+        let (market_pda, _) =
+            manifest::validation::get_market_address(base_mint, quote_mint, market_id);
 
         send_tx_with_retry(
             Rc::clone(&context),
             &create_market_ixs[..],
             Some(&payer),
-            &[&payer_keypair, &market_keypair],
+            &[&payer_keypair],
         )
         .await
         .unwrap();
@@ -871,9 +888,15 @@ impl MarketFixture {
         // Dummy default value. Not valid until reload.
         MarketFixture {
             context: context_ref,
-            key: market_keypair.pubkey(),
+            key: market_pda,
             market: MarketValue {
-                fixed: MarketFixed::new_empty(&base_mint, &quote_mint, &market_keypair.pubkey()),
+                fixed: MarketFixed::new_empty(
+                    &base_mint,
+                    &quote_mint,
+                    &market_pda,
+                    0,
+                    Pubkey::default(),
+                ),
                 dynamic: Vec::new(),
             },
         }
@@ -1764,29 +1787,35 @@ pub async fn verify_vault_balance(
 }
 
 /// Create a market with the given base and quote mints.
-/// Returns the market keypair.
+/// Returns the derived market PDA address.
 pub async fn create_market_with_mints(
     context: Rc<RefCell<ProgramTestContext>>,
     base_mint: &Pubkey,
     quote_mint: &Pubkey,
-) -> Result<Keypair, BanksClientError> {
-    let market_keypair = Keypair::new();
+) -> Result<Pubkey, BanksClientError> {
     let payer_keypair = context.borrow().payer.insecure_clone();
     let payer = payer_keypair.pubkey();
 
-    let create_market_ixs: Vec<Instruction> =
-        create_market_instructions(&market_keypair.pubkey(), base_mint, quote_mint, &payer)
-            .unwrap();
+    let market_id: u8 = 0;
+    let create_market_ixs: Vec<Instruction> = create_market_instructions(
+        base_mint,
+        quote_mint,
+        &payer,
+        market_id,
+        &Pubkey::default(),
+    );
 
     send_tx_with_retry(
         Rc::clone(&context),
         &create_market_ixs[..],
         Some(&payer),
-        &[&payer_keypair, &market_keypair],
+        &[&payer_keypair],
     )
     .await?;
 
-    Ok(market_keypair)
+    let (market_pda, _) =
+        manifest::validation::get_market_address(base_mint, quote_mint, market_id);
+    Ok(market_pda)
 }
 
 /// Create a Token-2022 token account for a mint with transfer fee extension.

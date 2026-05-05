@@ -40,12 +40,12 @@ async fn create_market_fail_already_initialized() -> anyhow::Result<()> {
     let market_keypair: Keypair = Keypair::new();
     let payer: &Pubkey = &context_cell.payer.pubkey();
     let create_market_ixs: Vec<Instruction> = create_market_instructions(
-        &market_keypair.pubkey(),
         &test_fixture.sol_mint_fixture.key,
         &test_fixture.usdc_mint_fixture.key,
         payer,
-    )
-    .unwrap();
+        0,
+        &solana_sdk::pubkey::Pubkey::default(),
+    );
 
     let create_market_tx: Transaction = {
         Transaction::new_signed_with_payer(

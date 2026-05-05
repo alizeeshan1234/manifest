@@ -137,3 +137,32 @@ macro_rules! global_seeds_with_bump {
 pub fn get_global_address(mint: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(global_seeds!(mint), &crate::ID)
 }
+
+#[macro_export]
+macro_rules! market_seeds_with_bump {
+    ( $base_mint:expr, $quote_mint:expr, $market_id:expr, $bump:expr ) => {
+        &[&[
+            b"market",
+            $base_mint.as_ref(),
+            $quote_mint.as_ref(),
+            &[$market_id],
+            &[$bump],
+        ]]
+    };
+}
+
+pub fn get_market_address(
+    base_mint: &Pubkey,
+    quote_mint: &Pubkey,
+    market_id: u8,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            b"market",
+            base_mint.as_ref(),
+            quote_mint.as_ref(),
+            &[market_id],
+        ],
+        &crate::ID,
+    )
+}

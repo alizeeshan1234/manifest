@@ -143,7 +143,10 @@ pub struct MarketFixed {
     quote_mint_decimals: u8,
     base_vault_bump: u8,
     quote_vault_bump: u8,
-    _padding1: [u8; 3],
+    /// Disambiguates multiple markets for the same (base, quote) pair. Allows
+    /// hot-spot avoidance via separate markets at distinct PDAs.
+    market_id: u8,
+    _padding1: [u8; 2],
 
     /// Base mint
     base_mint: Pubkey,
@@ -184,6 +187,11 @@ pub struct MarketFixed {
     /// Use at your own risk.
     quote_volume: QuoteAtoms,
 
+    /// Authority allowed to delegate / undelegate this market to a MagicBlock
+    /// ephemeral rollup. Pubkey::default() means "no authority" — the market
+    /// cannot be delegated. Set at CreateMarket and immutable.
+    authority: Pubkey,
+
     // These are not included in the normal usage because they are informational
     // only and not worth the CU.
     #[cfg(feature = "certora")]
@@ -198,14 +206,13 @@ pub struct MarketFixed {
     #[cfg(feature = "certora")]
     /// Quote tokens reserved for non-global orders
     pub orderbook_quote_atoms: QuoteAtoms,
-    #[cfg(feature = "certora")]
-    _padding3: [u64; 4],
+    // Certora variant: 32 bytes used by the 4 atom fields above; no padding3 needed.
 
     // Unused padding. Saved in case a later version wants to be backwards
     // compatible. Also, it is nice to have the fixed size be a round number,
     // 256 bytes.
     #[cfg(not(feature = "certora"))]
-    _padding3: [u64; 8],
+    _padding3: [u64; 4],
 }
 const_assert_eq!(
     size_of::<MarketFixed>(),
@@ -215,7 +222,8 @@ const_assert_eq!(
     1 +   // quote_mint_decimals
     1 +   // base_vault_bump
     1 +   // quote_vault_bump
-    3 +   // padding
+    1 +   // market_id
+    2 +   // padding1
     32 +  // base_mint
     32 +  // quote_mint
     32 +  // base_vault
@@ -227,10 +235,11 @@ const_assert_eq!(
     4 +   // asks_root_index
     4 +   // asks_best_index
     4 +   // claimed_seats_root_index
-    4 +   // claimed_seats_best_index
     4 +   // free_list_head_index
-    8 +   // padding2
-    64 // padding4
+    4 +   // padding2
+    8 +   // quote_volume
+    32 +  // authority
+    32    // padding3 (non-certora) OR 4 atom fields (certora)
 );
 const_assert_eq!(size_of::<MarketFixed>(), MARKET_FIXED_SIZE);
 const_assert_eq!(size_of::<MarketFixed>() % 8, 0);
@@ -241,6 +250,8 @@ impl MarketFixed {
         base_mint: &MintAccountInfo,
         quote_mint: &MintAccountInfo,
         market_key: &Pubkey,
+        market_id: u8,
+        authority: Pubkey,
     ) -> Self {
         let (base_vault, base_vault_bump) = get_vault_address(market_key, base_mint.info.key);
         let (quote_vault, quote_vault_bump) = get_vault_address(market_key, quote_mint.info.key);
@@ -251,7 +262,8 @@ impl MarketFixed {
             quote_mint_decimals: quote_mint.mint.decimals,
             base_vault_bump,
             quote_vault_bump,
-            _padding1: [0; 3],
+            market_id,
+            _padding1: [0; 2],
             base_mint: *base_mint.info.key,
             quote_mint: *quote_mint.info.key,
             base_vault,
@@ -270,8 +282,9 @@ impl MarketFixed {
             free_list_head_index: 0,
             _padding2: [0; 1],
             quote_volume: QuoteAtoms::ZERO,
+            authority,
             #[cfg(not(feature = "certora"))]
-            _padding3: [0; 8],
+            _padding3: [0; 4],
             #[cfg(feature = "certora")]
             withdrawable_base_atoms: BaseAtoms::new(0),
             #[cfg(feature = "certora")]
@@ -280,8 +293,6 @@ impl MarketFixed {
             orderbook_base_atoms: BaseAtoms::new(0),
             #[cfg(feature = "certora")]
             orderbook_quote_atoms: QuoteAtoms::new(0),
-            #[cfg(feature = "certora")]
-            _padding3: [0; 4],
         }
     }
 
@@ -297,7 +308,8 @@ impl MarketFixed {
             quote_mint_decimals: nondet(),
             base_vault_bump: nondet(),
             quote_vault_bump: nondet(),
-            _padding1: [0; 3],
+            market_id: 0,
+            _padding1: [0; 2],
             base_mint: nondet(),
             quote_mint: nondet(),
             base_vault: nondet(),
@@ -312,11 +324,11 @@ impl MarketFixed {
             free_list_head_index: 0,
             _padding2: [0; 1],
             quote_volume: QuoteAtoms::ZERO,
+            authority: Pubkey::default(),
             withdrawable_base_atoms: BaseAtoms::new(nondet()),
             withdrawable_quote_atoms: QuoteAtoms::new(nondet()),
             orderbook_base_atoms: BaseAtoms::new(nondet()),
             orderbook_quote_atoms: QuoteAtoms::new(nondet()),
-            _padding3: [0; 4],
         }
     }
 
@@ -346,6 +358,12 @@ impl MarketFixed {
     }
     pub fn get_quote_volume(&self) -> QuoteAtoms {
         self.quote_volume
+    }
+    pub fn get_market_id(&self) -> u8 {
+        self.market_id
+    }
+    pub fn get_authority(&self) -> &Pubkey {
+        &self.authority
     }
 
     // Used only in this file to construct iterator
@@ -1979,6 +1997,7 @@ pub fn create_empty_market(
             executable: false,
         },
     };
-    let market_fixed: MarketFixed = MarketFixed::new_empty(&base_mint, &quote_mint, market_key);
+    let market_fixed: MarketFixed =
+        MarketFixed::new_empty(&base_mint, &quote_mint, market_key, 0, Pubkey::default());
     market_fixed
 }

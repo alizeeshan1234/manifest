@@ -476,7 +476,13 @@ mod test {
         );
 
         let mut market_value: DynamicAccount<MarketFixed, Vec<u8>> = MarketValue {
-            fixed: MarketFixed::new_empty(&base_mint, &quote_mint, &MARKET_KEY),
+            fixed: MarketFixed::new_empty(
+                &base_mint,
+                &quote_mint,
+                &MARKET_KEY,
+                0,
+                solana_sdk::pubkey::Pubkey::default(),
+            ),
             // 5 because 2 extra, 1 seat, 2 orders.
             dynamic: vec![0; MARKET_BLOCK_SIZE * 5],
         };

@@ -1,6 +1,9 @@
 export * from './BatchUpdate';
 export * from './ClaimSeat';
+export * from './CommitAndUndelegateMarket';
+export * from './CommitMarket';
 export * from './CreateMarket';
+export * from './DelegateMarket';
 export * from './Deposit';
 export * from './Expand';
 export * from './GlobalAddTrader';
@@ -10,4 +13,5 @@ export * from './GlobalDeposit';
 export * from './GlobalEvict';
 export * from './GlobalWithdraw';
 export * from './Swap';
+export * from './UndelegateMarket';
 export * from './Withdraw';

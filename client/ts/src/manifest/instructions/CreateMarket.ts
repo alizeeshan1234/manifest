@@ -7,6 +7,7 @@
 
 import * as splToken from '@solana/spl-token';
 import * as beet from '@metaplex-foundation/beet';
+import * as beetSolana from '@metaplex-foundation/beet-solana';
 import * as web3 from '@solana/web3.js';
 
 /**
@@ -16,7 +17,16 @@ import * as web3 from '@solana/web3.js';
  */
 export const CreateMarketStruct = new beet.BeetArgsStruct<{
   instructionDiscriminator: number;
-}>([['instructionDiscriminator', beet.u8]], 'CreateMarketInstructionArgs');
+  marketId: number;
+  authority: web3.PublicKey;
+}>(
+  [
+    ['instructionDiscriminator', beet.u8],
+    ['marketId', beet.u8],
+    ['authority', beetSolana.publicKey],
+  ],
+  'CreateMarketInstructionArgs',
+);
 /**
  * Accounts required by the _CreateMarket_ instruction
  *
@@ -55,10 +65,13 @@ export const createMarketInstructionDiscriminator = 0;
  */
 export function createCreateMarketInstruction(
   accounts: CreateMarketInstructionAccounts,
+  args: { marketId?: number; authority?: web3.PublicKey } = {},
   programId = new web3.PublicKey('MNFSTqtC93rEfYHB6hF82sKdZpUDFWkViLByLd1k1Ms'),
 ) {
   const [data] = CreateMarketStruct.serialize({
     instructionDiscriminator: createMarketInstructionDiscriminator,
+    marketId: args.marketId ?? 0,
+    authority: args.authority ?? web3.PublicKey.default,
   });
   const keys: web3.AccountMeta[] = [
     {

@@ -33,11 +33,20 @@ pub struct DelegateMarketParams {
     /// every order, seat, and fill that runs there must come out of this
     /// reservation.
     pub min_free_blocks: u32,
+
+    /// Optional pinned validator pubkey. None = any validator subscribed to
+    /// the endpoint the client connects to (default for devnet/mainnet pools).
+    /// Some(pk) = only that validator may process txs against this account
+    /// (used for self-hosted or paid dedicated validators).
+    pub validator: Option<Pubkey>,
 }
 
 impl DelegateMarketParams {
-    pub fn new(min_free_blocks: u32) -> Self {
-        Self { min_free_blocks }
+    pub fn new(min_free_blocks: u32, validator: Option<Pubkey>) -> Self {
+        Self {
+            min_free_blocks,
+            validator,
+        }
     }
 }
 
@@ -47,7 +56,10 @@ pub(crate) fn process_delegate_market(
     data: &[u8],
 ) -> ProgramResult {
     let params: DelegateMarketParams = DelegateMarketParams::try_from_slice(data)?;
-    let DelegateMarketParams { min_free_blocks } = params;
+    let DelegateMarketParams {
+        min_free_blocks,
+        validator,
+    } = params;
 
     let account_iter = &mut accounts.iter();
     let authority_info = next_account_info(account_iter)?;
@@ -137,7 +149,7 @@ pub(crate) fn process_delegate_market(
         DelegateConfig {
             // Per locked decision #4: manual-only commits.
             commit_frequency_ms: u32::MAX,
-            validator: None,
+            validator,
         },
     )?;
 

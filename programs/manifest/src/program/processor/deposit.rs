@@ -49,6 +49,11 @@ pub(crate) fn process_deposit_core(
     params: DepositParams,
 ) -> ProgramResult {
     let deposit_context: DepositContext = DepositContext::load(accounts)?;
+    crate::require!(
+        deposit_context.market.info.owner == &crate::ID,
+        crate::program::ManifestError::MarketIsDelegated,
+        "Cannot Deposit on a delegated market — undelegate first or use RequestDeposit (Phase 4.5)",
+    )?;
     let DepositParams {
         amount_atoms,
         trader_index_hint,

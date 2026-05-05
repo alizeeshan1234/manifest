@@ -26,6 +26,15 @@ pub(crate) fn expand_market_if_needed<'a, 'info, T: ManifestAccount + Pod + Clon
     payer: &AccountInfo<'info>,
     market_account_info: &ManifestAccountInfo<'a, 'info, T>,
 ) -> ProgramResult {
+    // No-op when the market is delegated to the MagicBlock ER. The ER cannot
+    // realloc under disable-realloc; callers are expected to have pre-reserved
+    // free blocks at DelegateMarket time via min_free_blocks. If the free list
+    // is exhausted on the ER, the next place_order will return InvalidFreeList
+    // and the trader must commit-and-undelegate to expand on base layer.
+    if market_account_info.info.owner != &crate::ID {
+        return Ok(());
+    }
+
     let need_expand: bool = {
         let market_data: &Ref<&mut [u8]> = &market_account_info.try_borrow_data()?;
         let fixed: &MarketFixed = get_helper::<MarketFixed>(market_data, 0_u32);

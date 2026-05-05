@@ -51,6 +51,11 @@ pub(crate) fn process_withdraw_core(
     params: WithdrawParams,
 ) -> ProgramResult {
     let withdraw_context: WithdrawContext = WithdrawContext::load(accounts)?;
+    crate::require!(
+        withdraw_context.market.info.owner == &crate::ID,
+        crate::program::ManifestError::MarketIsDelegated,
+        "Cannot Withdraw on a delegated market — undelegate first or use RequestWithdrawal (Phase 4.5)",
+    )?;
     let WithdrawParams {
         amount_atoms,
         trader_index_hint,

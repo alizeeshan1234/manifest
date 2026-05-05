@@ -80,6 +80,11 @@ pub(crate) fn process_swap_core(
     params: SwapParams,
 ) -> ProgramResult {
     let swap_context: SwapContext = SwapContext::load(accounts)?;
+    crate::require!(
+        swap_context.market.info.owner == &crate::ID,
+        crate::program::ManifestError::MarketIsDelegated,
+        "Cannot Swap on a delegated market — undelegate first",
+    )?;
 
     let SwapContext {
         market,

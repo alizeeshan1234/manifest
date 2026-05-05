@@ -16,6 +16,11 @@ pub(crate) fn process_expand_market(
 ) -> ProgramResult {
     let expand_market_context: ExpandMarketContext = ExpandMarketContext::load(accounts)?;
     let ExpandMarketContext { market, payer, .. } = expand_market_context;
+    crate::require!(
+        market.info.owner == &crate::ID,
+        crate::program::ManifestError::MarketIsDelegated,
+        "Cannot Expand a delegated market — disable-realloc on the ER prevents growth",
+    )?;
 
     match data.first_chunk::<4>() {
         Some(data) => {

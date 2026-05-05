@@ -230,6 +230,24 @@ pub(crate) fn process_batch_update_core(
         orders,
     } = params;
 
+    // When the market is delegated to the MagicBlock ER, certain order types
+    // are unsupported because the global account isn't delegated (so we can't
+    // do JIT capital pulls) and reverse-order placement may need realloc.
+    let is_delegated: bool = market.info.owner != &crate::ID;
+    if is_delegated {
+        for order in orders.iter() {
+            let ot: crate::state::OrderType = order.order_type();
+            crate::require!(
+                ot != crate::state::OrderType::Global
+                    && ot != crate::state::OrderType::Reverse
+                    && ot != crate::state::OrderType::ReverseTight,
+                crate::program::ManifestError::InvalidMarketParameters,
+                "Order type {:?} not allowed on delegated market",
+                ot,
+            )?;
+        }
+    }
+
     let current_slot: Option<u32> = Some(get_now_slot());
 
     trace!("batch_update trader_index_hint:{trader_index_hint:?} cancels:{cancels:?} orders:{orders:?}");

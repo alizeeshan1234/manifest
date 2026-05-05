@@ -1,6 +1,9 @@
 pub mod batch_update;
 pub mod claim_seat;
+pub mod commit_and_undelegate_market;
+pub mod commit_market;
 pub mod create_market;
+pub mod delegate_market;
 pub mod deposit;
 pub mod expand_market;
 pub mod global_add_trader;
@@ -11,6 +14,7 @@ pub mod global_evict;
 pub mod global_withdraw;
 pub mod shared;
 pub mod swap;
+pub mod undelegate_market;
 pub mod withdraw;
 
 pub use shared::*;

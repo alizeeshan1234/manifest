@@ -2,6 +2,7 @@
 //!
 
 pub mod logs;
+pub mod magicblock;
 pub mod program;
 pub mod quantities;
 pub mod state;
@@ -19,12 +20,14 @@ pub mod certora;
 use hypertree::trace;
 use program::{
     batch_update::process_batch_update, claim_seat::process_claim_seat,
-    create_market::process_create_market, deposit::process_deposit,
+    commit_and_undelegate_market::process_commit_and_undelegate_market,
+    commit_market::process_commit_market, create_market::process_create_market,
+    delegate_market::process_delegate_market, deposit::process_deposit,
     expand_market::process_expand_market, global_add_trader::process_global_add_trader,
     global_clean::process_global_clean, global_create::process_global_create,
     global_deposit::process_global_deposit, global_evict::process_global_evict,
-    global_withdraw::process_global_withdraw, process_swap, withdraw::process_withdraw,
-    ManifestInstruction,
+    global_withdraw::process_global_withdraw, process_swap,
+    undelegate_market::process_undelegate_market, withdraw::process_withdraw, ManifestInstruction,
 };
 use solana_program::{
     account_info::AccountInfo, declare_id, entrypoint::ProgramResult, program_error::ProgramError,
@@ -154,6 +157,18 @@ pub fn process_instruction(
         }
         ManifestInstruction::GlobalClean => {
             process_global_clean(program_id, accounts, data)?;
+        }
+        ManifestInstruction::DelegateMarket => {
+            process_delegate_market(program_id, accounts, data)?;
+        }
+        ManifestInstruction::CommitMarket => {
+            process_commit_market(program_id, accounts, data)?;
+        }
+        ManifestInstruction::CommitAndUndelegateMarket => {
+            process_commit_and_undelegate_market(program_id, accounts, data)?;
+        }
+        ManifestInstruction::UndelegateMarket => {
+            process_undelegate_market(program_id, accounts, data)?;
         }
     }
 

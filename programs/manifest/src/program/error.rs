@@ -48,6 +48,20 @@ pub enum ManifestError {
     InvalidEvict = 20,
     #[error("Tried to clean order that was not eligible to be cleaned")]
     InvalidClean = 21,
+    #[error("Market is currently delegated to a MagicBlock ER; ix not allowed on base layer")]
+    MarketIsDelegated = 22,
+    #[error("Caller is not the authority allowed to delegate this market")]
+    UnauthorizedDelegation = 23,
+    #[error("Market authority is unset (Pubkey::default()); market is non-delegatable")]
+    MarketNotDelegatable = 24,
+    #[error("Free-block reservation insufficient for requested delegation")]
+    InsufficientFreeBlocks = 25,
+    #[error("Invalid Magicblock program ID")]
+    InvalidMagicProgramId = 26,
+    #[error("Invalid Magicblock context ID")]
+    InvalidMagicContextId = 27,
+    #[error("Market account is not at the expected PDA")]
+    InvalidMarketPubkey = 28,
 }
 
 impl From<ManifestError> for ProgramError {

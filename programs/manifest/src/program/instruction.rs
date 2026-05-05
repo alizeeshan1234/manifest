@@ -162,6 +162,42 @@ pub enum ManifestInstruction {
     #[account(12, writable, optional, name = "global", desc = "Global account")]
     #[account(13, writable, optional, name = "global_vault", desc = "Global vault")]
     SwapV2 = 13,
+
+    /// Delegate the market to a MagicBlock ephemeral rollup. Base layer only.
+    /// Caller must be the market's authority.
+    #[account(0, writable, signer, name = "authority", desc = "Authority key for this market (set at CreateMarket)")]
+    #[account(1, name = "system_program", desc = "System program")]
+    #[account(2, writable, name = "market", desc = "Market PDA to delegate")]
+    #[account(3, name = "owner_program", desc = "Manifest program (this program)")]
+    #[account(4, writable, name = "delegation_buffer", desc = "Delegation buffer PDA")]
+    #[account(5, writable, name = "delegation_record", desc = "Delegation record PDA")]
+    #[account(6, writable, name = "delegation_metadata", desc = "Delegation metadata PDA")]
+    #[account(7, name = "delegation_program", desc = "MagicBlock delegation program")]
+    DelegateMarket = 14,
+
+    /// Snapshot delegated market state back to base layer; market stays delegated.
+    /// ER-side only.
+    #[account(0, writable, signer, name = "payer", desc = "Payer")]
+    #[account(1, writable, name = "market", desc = "Delegated market account")]
+    #[account(2, name = "magic_program", desc = "MagicBlock program")]
+    #[account(3, writable, name = "magic_context", desc = "MagicBlock context PDA")]
+    CommitMarket = 15,
+
+    /// Snapshot final state and queue undelegation. ER-side only.
+    /// Pair with UndelegateMarket on base layer to finalize.
+    #[account(0, writable, signer, name = "payer", desc = "Payer")]
+    #[account(1, writable, name = "market", desc = "Delegated market account")]
+    #[account(2, name = "magic_program", desc = "MagicBlock program")]
+    #[account(3, writable, name = "magic_context", desc = "MagicBlock context PDA")]
+    CommitAndUndelegateMarket = 16,
+
+    /// Finalize undelegation on base layer after CommitAndUndelegateMarket
+    /// has run on the ER. Returns market ownership to Manifest.
+    #[account(0, writable, name = "market", desc = "Market account being undelegated")]
+    #[account(1, name = "delegation_buffer", desc = "Delegation buffer PDA")]
+    #[account(2, writable, signer, name = "payer", desc = "Payer / rent receiver")]
+    #[account(3, name = "system_program", desc = "System program")]
+    UndelegateMarket = 17,
 }
 
 impl ManifestInstruction {
@@ -172,7 +208,7 @@ impl ManifestInstruction {
 
 #[test]
 fn test_instruction_serialization() {
-    let num_instructions: u8 = 13;
+    let num_instructions: u8 = 17;
     for i in 0..=255 {
         let instruction: ManifestInstruction = match ManifestInstruction::try_from(i) {
             Ok(j) => {

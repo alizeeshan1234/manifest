@@ -1,5 +1,6 @@
 pub mod batch_update;
 pub mod claim_seat;
+pub mod close_deposit_receipt;
 pub mod commit_and_undelegate_market;
 pub mod commit_market;
 pub mod create_market;
@@ -13,6 +14,8 @@ pub mod global_create;
 pub mod global_deposit;
 pub mod global_evict;
 pub mod global_withdraw;
+pub mod process_deposit_er;
+pub mod request_deposit;
 pub mod revoke_session_token;
 pub mod shared;
 pub mod swap;

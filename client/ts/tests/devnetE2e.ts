@@ -45,7 +45,13 @@ import { createClaimSeatInstruction } from '../src/manifest/instructions/ClaimSe
 import { OrderType } from '../src/manifest/types/OrderType';
 import { getMarketAddress, getVaultAddress } from '../src/utils/market';
 import {
+  DELEGATION_PROGRAM_ID,
+  getDelegationBuffer,
+  getDelegationMetadata,
+  getDelegationRecord,
   isDelegated,
+  MAGIC_CONTEXT_ID,
+  MAGIC_PROGRAM_ID,
   makeBaseConnection,
   makeErConnection,
 } from '../src/utils/magicblock';
@@ -443,5 +449,147 @@ describe('Manifest × MagicBlock — devnet E2E', function () {
       owner?.toBase58(),
       'market should be back under Manifest ownership',
     ).to.equal(PROGRAM_ID.toBase58());
+  });
+
+  // ── Phase 10: deposit Path A ─────────────────────────────────────────
+  // After the previous suite undelegated the market, re-delegate it and
+  // then run a single-tx deposit-while-delegated. The ix chain is:
+  //   user -> RequestDeposit (base)
+  //              ├─ SPL transfer wallet → market_vault
+  //              ├─ create DepositReceipt PDA
+  //              └─ delegate_account_with_actions(receipt, [ProcessDepositEr])
+  //   validator -> ProcessDepositEr (ER, post-delegation action)
+  //              ├─ credits seat
+  //              └─ commit_and_undelegate(receipt) + post-undelegate action
+  //   validator -> CloseDepositReceipt (base, post-undelegate action)
+  //              └─ closes receipt, refunds rent
+
+  function getDepositReceiptAddress(
+    market_: PublicKey,
+    trader: PublicKey,
+    mint: PublicKey,
+  ): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [
+        Buffer.from('deposit_receipt'),
+        market_.toBuffer(),
+        trader.toBuffer(),
+        mint.toBuffer(),
+      ],
+      PROGRAM_ID,
+    )[0];
+  }
+
+  it('Re-DelegateMarket for deposit Path A', async () => {
+    const delegated = await isDelegated(baseConn, market);
+    expect(delegated, 'market should be undelegated before re-delegate').to
+      .equal(false);
+
+    const ix = createDelegateMarketInstruction(
+      { authority: authority.publicKey, market },
+      { minFreeBlocks: 50, validator: null },
+    );
+    const tx = new Transaction().add(ix);
+    const sig = await sendAndConfirmTransaction(baseConn, tx, [authority], {
+      commitment: 'confirmed',
+      skipPreflight: true,
+    });
+    record('Re-DelegateMarket', sig);
+    await new Promise((r) => setTimeout(r, 3000));
+    expect(await isDelegated(baseConn, market), 'market should be delegated')
+      .to.equal(true);
+  });
+
+  it('RequestDeposit — single user signature, full flow auto-fires', async () => {
+    const depositAmount = 25_000_000n; // 25 USDC (quote, 6 decimals)
+
+    // Snapshot vault balance and trader_token balance before.
+    const quoteVault = getVaultAddress(market, quoteMint);
+    const vaultAccBefore = await baseConn.getTokenAccountBalance(quoteVault);
+    const traderAccBefore = await baseConn.getTokenAccountBalance(traderQuoteAta);
+    const vaultBalBefore = BigInt(vaultAccBefore.value.amount);
+    const traderBalBefore = BigInt(traderAccBefore.value.amount);
+
+    const receiptPda = getDepositReceiptAddress(
+      market,
+      payer.publicKey,
+      quoteMint,
+    );
+
+    const data = Buffer.alloc(1 + 8);
+    data.writeUInt8(20, 0); // RequestDeposit discriminator
+    data.writeBigUInt64LE(depositAmount, 1);
+
+    const ix = new (require('@solana/web3.js').TransactionInstruction)({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: market, isSigner: false, isWritable: false },
+        { pubkey: quoteVault, isSigner: false, isWritable: true },
+        { pubkey: receiptPda, isSigner: false, isWritable: true },
+        { pubkey: traderQuoteAta, isSigner: false, isWritable: true },
+        { pubkey: quoteMint, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: PROGRAM_ID, isSigner: false, isWritable: false },
+        {
+          pubkey: getDelegationBuffer(receiptPda, PROGRAM_ID),
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: getDelegationRecord(receiptPda),
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: getDelegationMetadata(receiptPda),
+          isSigner: false,
+          isWritable: true,
+        },
+        { pubkey: DELEGATION_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: MAGIC_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: MAGIC_CONTEXT_ID, isSigner: false, isWritable: true },
+      ],
+      data,
+    });
+
+    const tx = new Transaction().add(ix);
+    const sig = await sendAndConfirmTransaction(baseConn, tx, [payer], {
+      commitment: 'confirmed',
+      skipPreflight: true,
+    });
+    record('RequestDeposit', sig);
+
+    // Vault balance should have increased by exactly depositAmount.
+    const vaultAccAfterReq = await baseConn.getTokenAccountBalance(quoteVault);
+    expect(
+      BigInt(vaultAccAfterReq.value.amount) - vaultBalBefore,
+      'vault should have +depositAmount immediately',
+    ).to.equal(depositAmount);
+    expect(
+      traderBalBefore - BigInt((await baseConn.getTokenAccountBalance(traderQuoteAta)).value.amount),
+      'trader_token should have -depositAmount immediately',
+    ).to.equal(depositAmount);
+
+    // Wait for the post-delegation action chain to complete and the
+    // receipt to close (i.e., account no longer exists).
+    let receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    let elapsed = 0;
+    const deadline = 30_000;
+    while (receiptInfo !== null && elapsed < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      elapsed += 2000;
+      receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    }
+
+    expect(
+      receiptInfo,
+      'receipt should be closed by CloseDepositReceipt callback',
+    ).to.equal(null);
+
+    console.log(
+      `  vault delta: +${depositAmount}; receipt closed in ~${elapsed / 1000}s`,
+    );
   });
 });

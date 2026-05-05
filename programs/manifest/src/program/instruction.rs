@@ -210,6 +210,45 @@ pub enum ManifestInstruction {
     #[account(0, writable, signer, name = "owner", desc = "Real trader (must match session_token.owner)")]
     #[account(1, writable, name = "session_token", desc = "SessionToken PDA being closed")]
     RevokeSessionToken = 19,
+
+    /// Phase 10 deposit Path A — step [1]. Base layer, single user signature.
+    /// Tokens land in market_vault directly; receipt is delegated WITH a
+    /// post-delegation action that auto-fires ProcessDepositEr (ix 21) on
+    /// the ER, which in turn auto-fires CloseDepositReceipt (ix 22) on
+    /// base. End-to-end one-shot.
+    #[account(0, writable, signer, name = "trader", desc = "Trader / payer")]
+    #[account(1, name = "market", desc = "Market account (expected delegated)")]
+    #[account(2, writable, name = "market_vault", desc = "Market vault for the deposit's mint")]
+    #[account(3, writable, name = "receipt", desc = "DepositReceipt PDA — will be created + delegated")]
+    #[account(4, writable, name = "trader_token", desc = "Trader's source token account")]
+    #[account(5, name = "mint", desc = "Mint being deposited")]
+    #[account(6, name = "system_program", desc = "System program")]
+    #[account(7, name = "token_program", desc = "Token program (legacy or 2022)")]
+    #[account(8, name = "owner_program", desc = "Manifest program (this program)")]
+    #[account(9, writable, name = "delegation_buffer", desc = "Delegation buffer PDA")]
+    #[account(10, writable, name = "delegation_record", desc = "Delegation record PDA")]
+    #[account(11, writable, name = "delegation_metadata", desc = "Delegation metadata PDA")]
+    #[account(12, name = "delegation_program", desc = "MagicBlock delegation program")]
+    #[account(13, name = "magic_program", desc = "MagicBlock program (used by post-delegation action)")]
+    #[account(14, writable, name = "magic_context", desc = "MagicBlock context (used by post-delegation action)")]
+    RequestDeposit = 20,
+
+    /// Phase 10 deposit Path A — step [2]. Auto-fired on ER as a
+    /// post-delegation action. Validator-signed. Credits the seat,
+    /// schedules the CloseDepositReceipt post-undelegate action.
+    #[account(0, writable, signer, name = "trader", desc = "Trader (action signer)")]
+    #[account(1, writable, name = "market", desc = "Delegated market account")]
+    #[account(2, writable, name = "receipt", desc = "Delegated DepositReceipt PDA")]
+    #[account(3, name = "magic_program", desc = "MagicBlock program")]
+    #[account(4, writable, name = "magic_context", desc = "MagicBlock context PDA")]
+    ProcessDepositEr = 21,
+
+    /// Phase 10 deposit Path A — step [3]. Auto-fired on base as a
+    /// post-undelegate action. Validator-signed (NOT trader). Closes the
+    /// receipt and refunds rent.
+    #[account(0, writable, name = "trader", desc = "Trader (rent recipient; not a signer)")]
+    #[account(1, writable, name = "receipt", desc = "DepositReceipt — will be closed")]
+    CloseDepositReceipt = 22,
 }
 
 impl ManifestInstruction {
@@ -220,7 +259,7 @@ impl ManifestInstruction {
 
 #[test]
 fn test_instruction_serialization() {
-    let num_instructions: u8 = 19;
+    let num_instructions: u8 = 22;
     for i in 0..=255 {
         let instruction: ManifestInstruction = match ManifestInstruction::try_from(i) {
             Ok(j) => {

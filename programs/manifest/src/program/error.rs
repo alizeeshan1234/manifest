@@ -68,6 +68,16 @@ pub enum ManifestError {
     InvalidSessionSigner = 30,
     #[error("Session token is not at the expected PDA")]
     InvalidSessionTokenPubkey = 31,
+    #[error("Market must be delegated to use this instruction")]
+    MarketNotDelegated = 32,
+    #[error("Mint does not match either side of the market")]
+    InvalidDepositMint = 33,
+    #[error("Deposit receipt is not at the expected PDA")]
+    InvalidDepositReceiptPubkey = 34,
+    #[error("Deposit already processed on the ER")]
+    DepositAlreadyProcessed = 35,
+    #[error("Deposit not yet processed on the ER")]
+    DepositNotProcessed = 36,
 }
 
 impl From<ManifestError> for ProgramError {

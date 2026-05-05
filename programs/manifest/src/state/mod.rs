@@ -1,5 +1,6 @@
 pub mod claimed_seat;
 pub mod constants;
+pub mod deposit_receipt;
 pub mod dynamic_account;
 pub mod global;
 pub mod market;
@@ -8,6 +9,7 @@ pub mod session_token;
 pub mod utils;
 
 pub use constants::*;
+pub use deposit_receipt::*;
 pub use dynamic_account::*;
 pub use global::*;
 pub use market::*;

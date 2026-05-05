@@ -107,8 +107,12 @@ impl<'a, 'info> ClaimSeatContext<'a, 'info> {
         let account_iter: &mut Iter<AccountInfo<'info>> = &mut accounts.iter();
 
         let payer: Signer = Signer::new(next_account_info(account_iter)?)?;
+        // Accept market on either base layer (owner = Manifest) or ER
+        // (owner = delegation program). Discriminant is checked either way.
+        let market_info: &AccountInfo<'info> = next_account_info(account_iter)?;
         let market: ManifestAccountInfo<MarketFixed> =
-            ManifestAccountInfo::<MarketFixed>::new(next_account_info(account_iter)?)?;
+            ManifestAccountInfo::<MarketFixed>::new_delegated(market_info)
+                .or_else(|_| ManifestAccountInfo::<MarketFixed>::new(market_info))?;
         let _system_program: Program =
             Program::new(next_account_info(account_iter)?, &system_program::id())?;
         Ok(Self {
@@ -516,8 +520,12 @@ impl<'a, 'info> BatchUpdateContext<'a, 'info> {
         // Does not have to be writable, but this ix will fail if removing a
         // global or requiring expanding.
         let payer: Signer = Signer::new(next_account_info(account_iter)?)?;
+        // Accept either base-layer (owner=Manifest) or delegated (owner=
+        // delegation program) market — BatchUpdate is the hot path on the ER.
+        let market_info: &AccountInfo<'info> = next_account_info(account_iter)?;
         let market: ManifestAccountInfo<MarketFixed> =
-            ManifestAccountInfo::<MarketFixed>::new(next_account_info(account_iter)?)?;
+            ManifestAccountInfo::<MarketFixed>::new_delegated(market_info)
+                .or_else(|_| ManifestAccountInfo::<MarketFixed>::new(market_info))?;
         let system_program: Program =
             Program::new(next_account_info(account_iter)?, &system_program::id())?;
         // Certora version is not mutable.

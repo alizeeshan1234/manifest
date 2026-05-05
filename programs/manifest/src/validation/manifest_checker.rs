@@ -37,6 +37,29 @@ impl<'a, 'info, T: ManifestAccount + Get + Clone> ManifestAccountInfo<'a, 'info,
         })
     }
 
+    /// Like `new`, but accepts accounts whose owner is the MagicBlock
+    /// delegation program (i.e., the account has been delegated to an
+    /// ephemeral rollup and is currently being executed on the ER).
+    ///
+    /// This is used by instructions that must run on the ER (BatchUpdate,
+    /// ClaimSeat, ProcessDepositEr, ProcessWithdrawalEr). The discriminant
+    /// is still verified to ensure the bytes haven't been replaced.
+    pub fn new_delegated(
+        info: &'a AccountInfo<'info>,
+    ) -> Result<ManifestAccountInfo<'a, 'info, T>, ProgramError> {
+        // Skip ownership verification — when delegated, the owner is the
+        // delegation program, not Manifest.
+        let bytes: Ref<&mut [u8]> = info.try_borrow_data()?;
+        let (header_bytes, _) = bytes.split_at(size_of::<T>());
+        let header: &T = get_helper::<T>(header_bytes, 0_u32);
+        header.verify_discriminant()?;
+
+        Ok(Self {
+            info,
+            phantom: std::marker::PhantomData,
+        })
+    }
+
     pub fn new_init(
         info: &'a AccountInfo<'info>,
     ) -> Result<ManifestAccountInfo<'a, 'info, T>, ProgramError> {

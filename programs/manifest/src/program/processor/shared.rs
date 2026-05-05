@@ -210,10 +210,21 @@ pub(crate) fn get_trader_index_with_hint(
     dynamic_account: &MarketRefMut,
     payer: &Signer,
 ) -> Result<DataIndex, ProgramError> {
+    get_trader_index_with_hint_for(trader_index_hint, dynamic_account, payer.key)
+}
+
+/// Like `get_trader_index_with_hint` but takes a raw pubkey instead of a
+/// Signer. Used by BatchUpdate when a session token resolves the effective
+/// trader to a pubkey that is NOT the transaction signer.
+pub(crate) fn get_trader_index_with_hint_for(
+    trader_index_hint: Option<DataIndex>,
+    dynamic_account: &MarketRefMut,
+    trader: &solana_program::pubkey::Pubkey,
+) -> Result<DataIndex, ProgramError> {
     let trader_index: DataIndex = match trader_index_hint {
-        None => dynamic_account.get_trader_index(payer.key),
+        None => dynamic_account.get_trader_index(trader),
         Some(hinted_index) => {
-            verify_trader_index_hint(hinted_index, &dynamic_account, &payer)?;
+            verify_trader_index_hint_for(hinted_index, dynamic_account, trader)?;
             hinted_index
         }
     };
@@ -224,6 +235,14 @@ fn verify_trader_index_hint(
     hinted_index: DataIndex,
     dynamic_account: &MarketRefMut,
     payer: &Signer,
+) -> ProgramResult {
+    verify_trader_index_hint_for(hinted_index, dynamic_account, payer.key)
+}
+
+fn verify_trader_index_hint_for(
+    hinted_index: DataIndex,
+    dynamic_account: &MarketRefMut,
+    trader: &solana_program::pubkey::Pubkey,
 ) -> ProgramResult {
     require!(
         hinted_index % (MARKET_BLOCK_SIZE as DataIndex) == 0,
@@ -240,9 +259,7 @@ fn verify_trader_index_hint(
         hinted_index,
     )?;
     require!(
-        payer
-            .key
-            .eq(dynamic_account.get_trader_key_by_index(hinted_index)),
+        trader.eq(dynamic_account.get_trader_key_by_index(hinted_index)),
         crate::program::ManifestError::WrongIndexHintParams,
         "Invalid trader hint index {} did not match payer",
         hinted_index

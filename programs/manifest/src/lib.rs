@@ -22,11 +22,13 @@ use program::{
     batch_update::process_batch_update, claim_seat::process_claim_seat,
     commit_and_undelegate_market::process_commit_and_undelegate_market,
     commit_market::process_commit_market, create_market::process_create_market,
+    create_session_token::process_create_session_token,
     delegate_market::process_delegate_market, deposit::process_deposit,
     expand_market::process_expand_market, global_add_trader::process_global_add_trader,
     global_clean::process_global_clean, global_create::process_global_create,
     global_deposit::process_global_deposit, global_evict::process_global_evict,
     global_withdraw::process_global_withdraw, process_swap,
+    revoke_session_token::process_revoke_session_token,
     undelegate_market::process_undelegate_market, withdraw::process_withdraw, ManifestInstruction,
 };
 use solana_program::{
@@ -187,6 +189,12 @@ pub fn process_instruction(
         }
         ManifestInstruction::UndelegateMarket => {
             process_undelegate_market(program_id, accounts, data)?;
+        }
+        ManifestInstruction::CreateSessionToken => {
+            process_create_session_token(program_id, accounts, data)?;
+        }
+        ManifestInstruction::RevokeSessionToken => {
+            process_revoke_session_token(program_id, accounts, data)?;
         }
     }
 

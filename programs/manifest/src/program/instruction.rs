@@ -198,6 +198,18 @@ pub enum ManifestInstruction {
     #[account(2, writable, signer, name = "payer", desc = "Payer / rent receiver")]
     #[account(3, name = "system_program", desc = "System program")]
     UndelegateMarket = 17,
+
+    /// Authorize an ephemeral session keypair to sign BatchUpdate ixs on
+    /// behalf of the owner. PDA at [b"session", owner, session_signer].
+    #[account(0, writable, signer, name = "owner", desc = "Real trader / payer")]
+    #[account(1, writable, name = "session_token", desc = "SessionToken PDA being created")]
+    #[account(2, name = "system_program", desc = "System program")]
+    CreateSessionToken = 18,
+
+    /// Close a SessionToken and refund the rent to the owner.
+    #[account(0, writable, signer, name = "owner", desc = "Real trader (must match session_token.owner)")]
+    #[account(1, writable, name = "session_token", desc = "SessionToken PDA being closed")]
+    RevokeSessionToken = 19,
 }
 
 impl ManifestInstruction {
@@ -208,7 +220,7 @@ impl ManifestInstruction {
 
 #[test]
 fn test_instruction_serialization() {
-    let num_instructions: u8 = 17;
+    let num_instructions: u8 = 19;
     for i in 0..=255 {
         let instruction: ManifestInstruction = match ManifestInstruction::try_from(i) {
             Ok(j) => {

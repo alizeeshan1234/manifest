@@ -62,6 +62,12 @@ pub enum ManifestError {
     InvalidMagicContextId = 27,
     #[error("Market account is not at the expected PDA")]
     InvalidMarketPubkey = 28,
+    #[error("Session token has expired")]
+    SessionTokenExpired = 29,
+    #[error("Caller is not the authorized session signer for this token")]
+    InvalidSessionSigner = 30,
+    #[error("Session token is not at the expected PDA")]
+    InvalidSessionTokenPubkey = 31,
 }
 
 impl From<ManifestError> for ProgramError {

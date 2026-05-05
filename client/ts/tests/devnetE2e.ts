@@ -40,7 +40,6 @@ import {
   createCommitMarketInstruction,
   createCreateMarketInstruction,
   createDelegateMarketInstruction,
-  createUndelegateMarketInstruction,
 } from '../src/manifest/instructions';
 import { createClaimSeatInstruction } from '../src/manifest/instructions/ClaimSeat';
 import { OrderType } from '../src/manifest/types/OrderType';
@@ -53,8 +52,10 @@ import {
 import { PROGRAM_ID } from '../src/manifest';
 
 const DEVNET_RPC = 'https://api.devnet.solana.com';
-const ER_RPC = 'https://devnet.magicblock.app';
-const ER_WS = 'wss://devnet.magicblock.app';
+// MagicBlock devnet ER endpoint that handles fee bridging from non-delegated
+// payers. This is the endpoint magic-trade uses for their devnet tests.
+const ER_RPC = process.env.ER_RPC_URL ?? 'https://devnet-as.magicblock.app';
+const ER_WS = process.env.ER_WS_URL ?? 'wss://devnet-as.magicblock.app';
 
 function loadLocalKeypair(): Keypair {
   const p = path.join(os.homedir(), '.config', 'solana', 'id.json');
@@ -269,12 +270,38 @@ describe('Manifest × MagicBlock — devnet E2E', function () {
     record('Deposit (quote side)', sigQuote);
   });
 
+  it('Pre-expand market to reserve free blocks (must happen before delegate)', async () => {
+    // The ER cannot realloc the market (disable-realloc + Feepayer-not-
+    // delegated checks). Every place_order consumes a free block from the
+    // market arena. Pre-expand on base so the ER never needs to grow.
+    const num_free_blocks = 50;
+    const data = Buffer.alloc(1 + 4);
+    data.writeUInt8(5, 0); // Expand discriminator
+    data.writeUInt32LE(num_free_blocks, 1);
+    const expandIx = new (require('@solana/web3.js').TransactionInstruction)({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: market, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+      data,
+    });
+    const sig = await sendAndConfirmTransaction(
+      baseConn,
+      new Transaction().add(expandIx),
+      [payer],
+      { commitment: 'confirmed' },
+    );
+    record(`Expand market by ${num_free_blocks} blocks`, sig);
+  });
+
   it('DelegateMarket — base layer (CPIs to delegation program)', async () => {
     expect(await isDelegated(baseConn, market)).to.equal(false);
 
     const ix = createDelegateMarketInstruction(
       { authority: authority.publicKey, market },
-      { minFreeBlocks: 0, validator: null },
+      { minFreeBlocks: 50, validator: null },
     );
     const tx = new Transaction().add(ix);
     const sig = await sendAndConfirmTransaction(baseConn, tx, [authority], {
@@ -289,6 +316,37 @@ describe('Manifest × MagicBlock — devnet E2E', function () {
     console.log(`  market.owner now delegation-program? ${owned}`);
   });
 
+  async function sendErAndConfirm(label: string, tx: Transaction) {
+    const t0 = Date.now();
+    const sig = await erConn.sendRawTransaction(tx.serialize(), {
+      skipPreflight: true,
+    });
+    const sentAt = Date.now() - t0;
+    // Poll for tx result on the ER.
+    let parsed: any = null;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        parsed = await erConn.getTransaction(sig, {
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0,
+        });
+        if (parsed) break;
+      } catch {
+        /* retry */
+      }
+    }
+    record(`${label} (ER, ${sentAt}ms send)`, sig);
+    if (parsed?.meta?.err) {
+      const errStr = JSON.stringify(parsed.meta.err);
+      const logs: string[] = parsed.meta.logMessages ?? [];
+      console.log(`  ✗ ${label} on-chain error:`, errStr);
+      console.log(`  logs:`, logs.slice(0, 30).join('\n         '));
+      throw new Error(`${label} reverted: ${errStr}`);
+    }
+    return sig;
+  }
+
   it('BatchUpdate place — ER, posts a bid + an ask', async () => {
     const ix = createBatchUpdateInstruction(
       { payer: payer.publicKey, market },
@@ -298,9 +356,9 @@ describe('Manifest × MagicBlock — devnet E2E', function () {
           cancels: [],
           orders: [
             {
-              baseAtoms: new BN('1000000000'), // 1 base unit
+              baseAtoms: new BN('1000000000'),
               priceMantissa: 100,
-              priceExponent: -2, // price 1.00 quote per base
+              priceExponent: -2,
               isBid: true,
               lastValidSlot: 0,
               orderType: OrderType.Limit,
@@ -308,7 +366,7 @@ describe('Manifest × MagicBlock — devnet E2E', function () {
             {
               baseAtoms: new BN('1000000000'),
               priceMantissa: 105,
-              priceExponent: -2, // 1.05
+              priceExponent: -2,
               isBid: false,
               lastValidSlot: 0,
               orderType: OrderType.Limit,
@@ -323,21 +381,12 @@ describe('Manifest × MagicBlock — devnet E2E', function () {
     const { blockhash } = await erConn.getLatestBlockhash();
     tx.recentBlockhash = blockhash;
     tx.sign(payer);
-    const t0 = Date.now();
-    const sig = await erConn.sendRawTransaction(tx.serialize(), {
-      skipPreflight: true,
-    });
-    const sentAt = Date.now() - t0;
-    record(`BatchUpdate place (ER, ${sentAt}ms send)`, sig);
+    await sendErAndConfirm('BatchUpdate place', tx);
   });
 
-  it('BatchUpdate cancel — ER, cancels both orders by sequence number', async () => {
-    // Latest market state on the ER. Read from ER endpoint, not base.
-    await new Promise((r) => setTimeout(r, 1500)); // allow place to settle
-    const acct = await erConn.getAccountInfo(market);
-    expect(acct, 'market visible on ER').to.not.be.null;
+  it('BatchUpdate cancel — ER, cancels both orders', async () => {
+    await new Promise((r) => setTimeout(r, 1500));
 
-    // Sequence numbers 0 and 1 (first two orders placed).
     const ix = createBatchUpdateInstruction(
       { payer: payer.publicKey, market },
       {
@@ -357,12 +406,7 @@ describe('Manifest × MagicBlock — devnet E2E', function () {
     const { blockhash } = await erConn.getLatestBlockhash();
     tx.recentBlockhash = blockhash;
     tx.sign(payer);
-    const t0 = Date.now();
-    const sig = await erConn.sendRawTransaction(tx.serialize(), {
-      skipPreflight: true,
-    });
-    const sentAt = Date.now() - t0;
-    record(`BatchUpdate cancel (ER, ${sentAt}ms send)`, sig);
+    await sendErAndConfirm('BatchUpdate cancel', tx);
   });
 
   it('CommitAndUndelegateMarket — ER side', async () => {

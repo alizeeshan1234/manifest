@@ -11,7 +11,7 @@ use solana_program::{
 use crate::{
     program::ManifestError,
     require,
-    state::{GlobalFixed, MarketFixed},
+    state::{GlobalFixed, MarketFixed, SessionTokenFixed},
     validation::{
         get_global_address, EmptyAccount, MintAccountInfo, Program, Signer, TokenAccountInfo,
     },
@@ -511,23 +511,49 @@ pub(crate) struct BatchUpdateContext<'a, 'info> {
 
     // One for each side. First is base, then is quote.
     pub global_trade_accounts_opts: [Option<GlobalTradeAccounts<'a, 'info>>; 2],
+
+    /// Optional session token. When present, the BatchUpdate processor will
+    /// look up the trader seat by `session_token.owner` instead of by the
+    /// signer's pubkey. Used so an ephemeral keypair can sign for a user.
+    pub session_token: Option<ManifestAccountInfo<'a, 'info, SessionTokenFixed>>,
 }
 
 impl<'a, 'info> BatchUpdateContext<'a, 'info> {
     pub fn load(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        let account_iter: &mut Iter<AccountInfo<'info>> = &mut accounts.iter();
-
-        // Does not have to be writable, but this ix will fail if removing a
-        // global or requiring expanding.
-        let payer: Signer = Signer::new(next_account_info(account_iter)?)?;
+        // First three slots are fixed: payer, market, system_program.
+        if accounts.len() < 3 {
+            return Err(ProgramError::NotEnoughAccountKeys);
+        }
+        let payer: Signer = Signer::new(&accounts[0])?;
         // Accept either base-layer (owner=Manifest) or delegated (owner=
         // delegation program) market — BatchUpdate is the hot path on the ER.
-        let market_info: &AccountInfo<'info> = next_account_info(account_iter)?;
         let market: ManifestAccountInfo<MarketFixed> =
-            ManifestAccountInfo::<MarketFixed>::new_delegated(market_info)
-                .or_else(|_| ManifestAccountInfo::<MarketFixed>::new(market_info))?;
+            ManifestAccountInfo::<MarketFixed>::new_delegated(&accounts[1])
+                .or_else(|_| ManifestAccountInfo::<MarketFixed>::new(&accounts[1]))?;
         let system_program: Program =
-            Program::new(next_account_info(account_iter)?, &system_program::id())?;
+            Program::new(&accounts[2], &system_program::id())?;
+
+        // Optional: account[3] may be a SessionToken. We probe by looking at
+        // the owner — if it's Manifest itself, attempt the discriminant load.
+        // Otherwise leave the slot for the globals loop below.
+        let mut next_idx: usize = 3;
+        let session_token: Option<ManifestAccountInfo<'a, 'info, SessionTokenFixed>> =
+            if accounts.len() > next_idx && accounts[next_idx].owner == &crate::ID {
+                match ManifestAccountInfo::<SessionTokenFixed>::new(&accounts[next_idx]) {
+                    Ok(t) => {
+                        next_idx += 1;
+                        Some(t)
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
+
+        // Build an iterator over the remaining (post-session-token) accounts
+        // for the existing globals loop to consume.
+        let account_iter: &mut Iter<AccountInfo<'info>> = &mut accounts[next_idx..].iter();
+
         // Certora version is not mutable.
         #[cfg(feature = "certora")]
         let global_trade_accounts_opts: [Option<GlobalTradeAccounts<'a, 'info>>; 2] = [None, None];
@@ -630,6 +656,7 @@ impl<'a, 'info> BatchUpdateContext<'a, 'info> {
             market,
             _system_program: system_program,
             global_trade_accounts_opts,
+            session_token,
         })
     }
 }

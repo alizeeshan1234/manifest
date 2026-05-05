@@ -221,8 +221,40 @@ pub(crate) fn process_batch_update_core(
         market,
         payer,
         global_trade_accounts_opts,
+        session_token,
         ..
     } = batch_update_context;
+
+    // Resolve effective trader. If a session_token is provided, the signer
+    // is the ephemeral session keypair acting on behalf of session_token.owner.
+    // Otherwise the signer IS the trader.
+    let effective_trader: solana_program::pubkey::Pubkey = if let Some(token) = &session_token {
+        let fixed = token.get_fixed()?;
+        let now_unix: i64 = <solana_program::clock::Clock as solana_program::sysvar::Sysvar>::get()?.unix_timestamp;
+        crate::require!(
+            !fixed.is_expired(now_unix),
+            crate::program::ManifestError::SessionTokenExpired,
+            "Session token expired",
+        )?;
+        crate::require!(
+            fixed.session_signer == *payer.key,
+            crate::program::ManifestError::InvalidSessionSigner,
+            "Signer does not match session_token.session_signer",
+        )?;
+        // Verify the SessionToken account is at its expected PDA.
+        let (expected, _bump) = crate::state::get_session_token_address(
+            &fixed.owner,
+            &fixed.session_signer,
+        );
+        crate::require!(
+            &expected == token.info.key,
+            crate::program::ManifestError::InvalidSessionTokenPubkey,
+            "SessionToken PDA mismatch",
+        )?;
+        fixed.owner
+    } else {
+        *payer.key
+    };
 
     let BatchUpdateParams {
         trader_index_hint,
@@ -257,7 +289,12 @@ pub(crate) fn process_batch_update_core(
 
         let mut dynamic_account: MarketRefMut = get_mut_dynamic_account(market_data);
         let trader_index: DataIndex =
-            get_trader_index_with_hint(trader_index_hint, &dynamic_account, &payer)?;
+            crate::program::get_trader_index_with_hint_for(
+                trader_index_hint,
+                &dynamic_account,
+                &effective_trader,
+            )?;
+        let _ = get_trader_index_with_hint; // keep import warm
 
         for cancel_order_params in cancels {
             // Hinted is preferred because that is O(1) to find and O(log n) to

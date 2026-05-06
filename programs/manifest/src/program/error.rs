@@ -84,6 +84,16 @@ pub enum ManifestError {
     InvalidWithdrawalReceiptPubkey = 38,
     #[error("Withdrawal already processed on the ER")]
     WithdrawalAlreadyProcessed = 39,
+    #[error("Invalid swap accounts")]
+    InvalidSwapAccounts = 40,
+    #[error("Mint does not match either side of the market for swap")]
+    InvalidSwapMint = 41,
+    #[error("Swap receipt is not at the expected PDA")]
+    InvalidSwapReceiptPubkey = 42,
+    #[error("Swap already processed on the ER")]
+    SwapAlreadyProcessed = 43,
+    #[error("Swap output below min_out (slippage exceeded)")]
+    SwapSlippageExceeded = 44,
 }
 
 impl From<ManifestError> for ProgramError {

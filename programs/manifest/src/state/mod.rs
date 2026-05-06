@@ -6,6 +6,7 @@ pub mod global;
 pub mod market;
 pub mod resting_order;
 pub mod session_token;
+pub mod swap_receipt;
 pub mod utils;
 pub mod withdrawal_receipt;
 
@@ -16,4 +17,5 @@ pub use global::*;
 pub use market::*;
 pub use resting_order::*;
 pub use session_token::*;
+pub use swap_receipt::*;
 pub use withdrawal_receipt::*;

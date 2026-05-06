@@ -712,4 +712,604 @@ describe('Manifest × MagicBlock — devnet E2E', function () {
     expect(vaultDelta).to.equal(-traderDelta);
     expect(traderDelta > 0n, 'trader should have received tokens').to.equal(true);
   });
+
+  // ── Phase A: 2-trader taker-fill scenario on the ER ──────────────────
+  // Onboard trader2 *while the market stays delegated* — never undelegate
+  // for setup, since in production a market should remain delegated 24/7.
+  //
+  // Flow:
+  //   1. Fund trader2 with SOL + mint test tokens (base, doesn't touch market)
+  //   2. Trader2 ClaimSeat on the ER (delegated market accepts ClaimSeat;
+  //      expand_market_if_needed is a no-op when delegated)
+  //   3. Trader2 RequestDeposit Path A on base (1 sig, deposit while delegated)
+  //   4. Trader1 posts a resting bid on the ER
+  //   5. Trader2 fires a crossing ask on the ER → fill happens inside BatchUpdate
+  //   6. CommitAndUndelegate + Withdraws on base prove the fill persisted.
+
+  const trader2 = Keypair.generate();
+  let trader2Base: PublicKey;
+  let trader2Quote: PublicKey;
+  const FILL_BASE_ATOMS = 1_000_000_000n; // 1B base atoms
+  const FILL_QUOTE_ATOMS = 1_000_000_000n; // price = 1.0 quote per base
+  const TRADER2_DEPOSIT = 50_000_000_000n; // 50B atoms each side
+
+  it('Setup trader2: fund SOL + mint test tokens (no market mutation)', async () => {
+    expect(
+      await isDelegated(baseConn, market),
+      'market must stay delegated for trader2 onboarding',
+    ).to.equal(true);
+
+    const fundTx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: trader2.publicKey,
+        lamports: 500_000_000, // 0.5 SOL on base for fee bridging + ATA owners
+      }),
+    );
+    await sendAndConfirmTransaction(baseConn, fundTx, [payer], {
+      commitment: 'confirmed',
+    });
+
+    const baseAcct2 = await getOrCreateAssociatedTokenAccount(
+      baseConn,
+      payer,
+      baseMint,
+      trader2.publicKey,
+    );
+    const quoteAcct2 = await getOrCreateAssociatedTokenAccount(
+      baseConn,
+      payer,
+      quoteMint,
+      trader2.publicKey,
+    );
+    trader2Base = baseAcct2.address;
+    trader2Quote = quoteAcct2.address;
+
+    await mintTo(
+      baseConn,
+      payer,
+      baseMint,
+      trader2Base,
+      payer,
+      100_000_000_000n,
+    );
+    await mintTo(
+      baseConn,
+      payer,
+      quoteMint,
+      trader2Quote,
+      payer,
+      100_000_000_000n,
+    );
+  });
+
+  it('Trader2 ClaimSeat on the ER (delegated market)', async () => {
+    const ix = createClaimSeatInstruction({
+      payer: trader2.publicKey,
+      market,
+    });
+    const tx = new Transaction().add(ix);
+    tx.feePayer = trader2.publicKey;
+    const { blockhash } = await erConn.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.sign(trader2);
+    await sendErAndConfirm('Trader2 ClaimSeat (ER)', tx);
+  });
+
+  it('Trader2 RequestDeposit (base side) — Path A while delegated', async () => {
+    const baseVault = getVaultAddress(market, baseMint);
+    const receiptPda = getDepositReceiptAddress(
+      market,
+      trader2.publicKey,
+      baseMint,
+    );
+    const data = Buffer.alloc(1 + 8);
+    data.writeUInt8(20, 0);
+    data.writeBigUInt64LE(TRADER2_DEPOSIT, 1);
+
+    const ix = new (require('@solana/web3.js').TransactionInstruction)({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: trader2.publicKey, isSigner: true, isWritable: true },
+        { pubkey: market, isSigner: false, isWritable: false },
+        { pubkey: baseVault, isSigner: false, isWritable: true },
+        { pubkey: receiptPda, isSigner: false, isWritable: true },
+        { pubkey: trader2Base, isSigner: false, isWritable: true },
+        { pubkey: baseMint, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: PROGRAM_ID, isSigner: false, isWritable: false },
+        {
+          pubkey: getDelegationBuffer(receiptPda, PROGRAM_ID),
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: getDelegationRecord(receiptPda),
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: getDelegationMetadata(receiptPda),
+          isSigner: false,
+          isWritable: true,
+        },
+        { pubkey: DELEGATION_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: MAGIC_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: MAGIC_CONTEXT_ID, isSigner: false, isWritable: true },
+      ],
+      data,
+    });
+    const sig = await sendAndConfirmTransaction(
+      baseConn,
+      new Transaction().add(ix),
+      [trader2],
+      { commitment: 'confirmed', skipPreflight: true },
+    );
+    record('Trader2 RequestDeposit (base)', sig);
+
+    let receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    let elapsed = 0;
+    while (receiptInfo !== null && elapsed < 30_000) {
+      await new Promise((r) => setTimeout(r, 2000));
+      elapsed += 2000;
+      receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    }
+    expect(receiptInfo, 'base receipt should be closed by callback').to.equal(
+      null,
+    );
+  });
+
+  it('Trader2 RequestDeposit (quote side) — Path A while delegated', async () => {
+    const quoteVault = getVaultAddress(market, quoteMint);
+    const receiptPda = getDepositReceiptAddress(
+      market,
+      trader2.publicKey,
+      quoteMint,
+    );
+    const data = Buffer.alloc(1 + 8);
+    data.writeUInt8(20, 0);
+    data.writeBigUInt64LE(TRADER2_DEPOSIT, 1);
+
+    const ix = new (require('@solana/web3.js').TransactionInstruction)({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: trader2.publicKey, isSigner: true, isWritable: true },
+        { pubkey: market, isSigner: false, isWritable: false },
+        { pubkey: quoteVault, isSigner: false, isWritable: true },
+        { pubkey: receiptPda, isSigner: false, isWritable: true },
+        { pubkey: trader2Quote, isSigner: false, isWritable: true },
+        { pubkey: quoteMint, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: PROGRAM_ID, isSigner: false, isWritable: false },
+        {
+          pubkey: getDelegationBuffer(receiptPda, PROGRAM_ID),
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: getDelegationRecord(receiptPda),
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: getDelegationMetadata(receiptPda),
+          isSigner: false,
+          isWritable: true,
+        },
+        { pubkey: DELEGATION_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: MAGIC_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: MAGIC_CONTEXT_ID, isSigner: false, isWritable: true },
+      ],
+      data,
+    });
+    const sig = await sendAndConfirmTransaction(
+      baseConn,
+      new Transaction().add(ix),
+      [trader2],
+      { commitment: 'confirmed', skipPreflight: true },
+    );
+    record('Trader2 RequestDeposit (quote)', sig);
+
+    let receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    let elapsed = 0;
+    while (receiptInfo !== null && elapsed < 30_000) {
+      await new Promise((r) => setTimeout(r, 2000));
+      elapsed += 2000;
+      receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    }
+    expect(receiptInfo, 'quote receipt should be closed by callback').to.equal(
+      null,
+    );
+  });
+
+  it('Trader1 posts resting bid on ER', async () => {
+    const ix = createBatchUpdateInstruction(
+      { payer: payer.publicKey, market },
+      {
+        params: {
+          traderIndexHint: null,
+          cancels: [],
+          orders: [
+            {
+              baseAtoms: new BN(FILL_BASE_ATOMS.toString()),
+              priceMantissa: 100,
+              priceExponent: -2, // price = 1.0 quote per base
+              isBid: true,
+              lastValidSlot: 0,
+              orderType: OrderType.Limit,
+            },
+          ],
+        },
+      },
+    );
+    const tx = new Transaction().add(ix);
+    tx.feePayer = payer.publicKey;
+    const { blockhash } = await erConn.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.sign(payer);
+    await sendErAndConfirm('Trader1 resting bid', tx);
+  });
+
+  it('Trader2 places crossing ask on ER (taker fill)', async () => {
+    const ix = createBatchUpdateInstruction(
+      { payer: trader2.publicKey, market },
+      {
+        params: {
+          traderIndexHint: null,
+          cancels: [],
+          orders: [
+            {
+              baseAtoms: new BN(FILL_BASE_ATOMS.toString()),
+              priceMantissa: 100,
+              priceExponent: -2, // price = 1.0 — crosses trader1's bid
+              isBid: false,
+              lastValidSlot: 0,
+              orderType: OrderType.Limit,
+            },
+          ],
+        },
+      },
+    );
+    const tx = new Transaction().add(ix);
+    tx.feePayer = trader2.publicKey;
+    const { blockhash } = await erConn.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.sign(trader2);
+    await sendErAndConfirm('Trader2 crossing ask (taker)', tx);
+  });
+
+  // Single helper used by both fill-verification withdraws below.
+  function buildRequestWithdrawalIx(
+    signerKey: PublicKey,
+    mint: PublicKey,
+    vault: PublicKey,
+    traderToken: PublicKey,
+    amount: bigint,
+  ) {
+    const receiptPda = getWithdrawalReceiptAddress(market, signerKey, mint);
+    const data = Buffer.alloc(1 + 8);
+    data.writeUInt8(23, 0);
+    data.writeBigUInt64LE(amount, 1);
+    return {
+      receiptPda,
+      ix: new (require('@solana/web3.js').TransactionInstruction)({
+        programId: PROGRAM_ID,
+        keys: [
+          { pubkey: signerKey, isSigner: true, isWritable: true },
+          { pubkey: market, isSigner: false, isWritable: false },
+          { pubkey: receiptPda, isSigner: false, isWritable: true },
+          { pubkey: mint, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: PROGRAM_ID, isSigner: false, isWritable: false },
+          {
+            pubkey: getDelegationBuffer(receiptPda, PROGRAM_ID),
+            isSigner: false,
+            isWritable: true,
+          },
+          {
+            pubkey: getDelegationRecord(receiptPda),
+            isSigner: false,
+            isWritable: true,
+          },
+          {
+            pubkey: getDelegationMetadata(receiptPda),
+            isSigner: false,
+            isWritable: true,
+          },
+          { pubkey: DELEGATION_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: MAGIC_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: MAGIC_CONTEXT_ID, isSigner: false, isWritable: true },
+          { pubkey: vault, isSigner: false, isWritable: true },
+          { pubkey: traderToken, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ],
+        data,
+      }),
+    };
+  }
+
+  async function awaitReceiptClosed(receiptPda: PublicKey) {
+    let receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    let elapsed = 0;
+    while (receiptInfo !== null && elapsed < 30_000) {
+      await new Promise((r) => setTimeout(r, 2000));
+      elapsed += 2000;
+      receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    }
+    expect(receiptInfo, 'withdrawal receipt should be closed').to.equal(null);
+  }
+
+  it('Trader1 RequestWithdrawal Path A — pulls fill base while delegated', async () => {
+    expect(
+      await isDelegated(baseConn, market),
+      'market must still be delegated for verification',
+    ).to.equal(true);
+
+    const t1BaseBefore = BigInt(
+      (await baseConn.getTokenAccountBalance(traderBaseAta)).value.amount,
+    );
+    const { receiptPda, ix } = buildRequestWithdrawalIx(
+      payer.publicKey,
+      baseMint,
+      getVaultAddress(market, baseMint),
+      traderBaseAta,
+      FILL_BASE_ATOMS,
+    );
+    const sig = await sendAndConfirmTransaction(
+      baseConn,
+      new Transaction().add(ix),
+      [payer],
+      { commitment: 'confirmed', skipPreflight: true },
+    );
+    record('Trader1 RequestWithdrawal (gained base)', sig);
+    await awaitReceiptClosed(receiptPda);
+
+    const t1BaseAfter = BigInt(
+      (await baseConn.getTokenAccountBalance(traderBaseAta)).value.amount,
+    );
+    expect(
+      t1BaseAfter - t1BaseBefore,
+      'trader1 should have received fill base',
+    ).to.equal(FILL_BASE_ATOMS);
+  });
+
+  it('Trader2 RequestWithdrawal Path A — pulls fill quote while delegated', async () => {
+    expect(
+      await isDelegated(baseConn, market),
+      'market must still be delegated for verification',
+    ).to.equal(true);
+
+    const t2QuoteBefore = BigInt(
+      (await baseConn.getTokenAccountBalance(trader2Quote)).value.amount,
+    );
+    const { receiptPda, ix } = buildRequestWithdrawalIx(
+      trader2.publicKey,
+      quoteMint,
+      getVaultAddress(market, quoteMint),
+      trader2Quote,
+      FILL_QUOTE_ATOMS,
+    );
+    const sig = await sendAndConfirmTransaction(
+      baseConn,
+      new Transaction().add(ix),
+      [trader2],
+      { commitment: 'confirmed', skipPreflight: true },
+    );
+    record('Trader2 RequestWithdrawal (gained quote)', sig);
+    await awaitReceiptClosed(receiptPda);
+
+    const t2QuoteAfter = BigInt(
+      (await baseConn.getTokenAccountBalance(trader2Quote)).value.amount,
+    );
+    expect(
+      t2QuoteAfter - t2QuoteBefore,
+      'trader2 should have received fill quote',
+    ).to.equal(FILL_QUOTE_ATOMS);
+
+    console.log(
+      `  fill verified (market still delegated): trader1 +${FILL_BASE_ATOMS} base, trader2 +${FILL_QUOTE_ATOMS} quote`,
+    );
+  });
+
+  // ── Phase B: 1-sig swap-from-wallet (Path A) ────────────────────────
+  // Brand-new trader3 has NO seat, NO deposit. They sign one base-layer
+  // tx (RequestSwap) and the validator chain handles seat-claim + match
+  // + payout while the market stays delegated. Final state: trader3's
+  // wallet has the output mint, no seat left behind.
+
+  const trader3 = Keypair.generate();
+  let trader3Base: PublicKey;
+  let trader3Quote: PublicKey;
+  const SWAP_INPUT_QUOTE = 1_000_000_000n; // 1B quote atoms in
+  const SWAP_MIN_OUT_BASE = 900_000_000n; // expect ~1B base out at price 1.0
+
+  function getSwapReceiptAddress(
+    market_: PublicKey,
+    trader: PublicKey,
+    inputMint: PublicKey,
+  ): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [
+        Buffer.from('swap_receipt'),
+        market_.toBuffer(),
+        trader.toBuffer(),
+        inputMint.toBuffer(),
+      ],
+      PROGRAM_ID,
+    )[0];
+  }
+
+  it('Setup trader3: fund SOL + mint quote tokens (no seat, no deposit)', async () => {
+    expect(
+      await isDelegated(baseConn, market),
+      'market must stay delegated for swap',
+    ).to.equal(true);
+
+    const fundTx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: trader3.publicKey,
+        lamports: 500_000_000,
+      }),
+    );
+    await sendAndConfirmTransaction(baseConn, fundTx, [payer], {
+      commitment: 'confirmed',
+    });
+
+    const baseAcct3 = await getOrCreateAssociatedTokenAccount(
+      baseConn,
+      payer,
+      baseMint,
+      trader3.publicKey,
+    );
+    const quoteAcct3 = await getOrCreateAssociatedTokenAccount(
+      baseConn,
+      payer,
+      quoteMint,
+      trader3.publicKey,
+    );
+    trader3Base = baseAcct3.address;
+    trader3Quote = quoteAcct3.address;
+
+    // Only mint quote — trader3 will swap quote→base.
+    await mintTo(
+      baseConn,
+      payer,
+      quoteMint,
+      trader3Quote,
+      payer,
+      10_000_000_000n,
+    );
+  });
+
+  it('Trader1 reposts a resting ask on ER for trader3 to take', async () => {
+    // After the fill test, trader1 has plenty of base on-seat. Post a
+    // fresh ask for trader3's swap to consume.
+    const ix = createBatchUpdateInstruction(
+      { payer: payer.publicKey, market },
+      {
+        params: {
+          traderIndexHint: null,
+          cancels: [],
+          orders: [
+            {
+              baseAtoms: new BN('1000000000'),
+              priceMantissa: 100,
+              priceExponent: -2, // price = 1.0 quote per base
+              isBid: false,
+              lastValidSlot: 0,
+              orderType: OrderType.Limit,
+            },
+          ],
+        },
+      },
+    );
+    const tx = new Transaction().add(ix);
+    tx.feePayer = payer.publicKey;
+    const { blockhash } = await erConn.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.sign(payer);
+    await sendErAndConfirm('Trader1 resting ask (for swap)', tx);
+  });
+
+  it('Trader3 RequestSwap — 1 sig, full chain auto-fires', async () => {
+    const baseVault = getVaultAddress(market, baseMint);
+    const quoteVault = getVaultAddress(market, quoteMint);
+    const receiptPda = getSwapReceiptAddress(
+      market,
+      trader3.publicKey,
+      quoteMint,
+    );
+
+    const t3BaseBefore = BigInt(
+      (await baseConn.getTokenAccountBalance(trader3Base)).value.amount,
+    );
+    const t3QuoteBefore = BigInt(
+      (await baseConn.getTokenAccountBalance(trader3Quote)).value.amount,
+    );
+
+    const data = Buffer.alloc(1 + 8 + 8);
+    data.writeUInt8(26, 0); // RequestSwap discriminator
+    data.writeBigUInt64LE(SWAP_INPUT_QUOTE, 1);
+    data.writeBigUInt64LE(SWAP_MIN_OUT_BASE, 9);
+
+    const ix = new (require('@solana/web3.js').TransactionInstruction)({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: trader3.publicKey, isSigner: true, isWritable: true },
+        { pubkey: market, isSigner: false, isWritable: false },
+        { pubkey: quoteVault, isSigner: false, isWritable: true }, // input_vault
+        { pubkey: baseVault, isSigner: false, isWritable: true }, // output_vault
+        { pubkey: receiptPda, isSigner: false, isWritable: true },
+        { pubkey: trader3Quote, isSigner: false, isWritable: true }, // trader_token_in
+        { pubkey: trader3Base, isSigner: false, isWritable: true }, // trader_token_out
+        { pubkey: quoteMint, isSigner: false, isWritable: false }, // input_mint
+        { pubkey: baseMint, isSigner: false, isWritable: false }, // output_mint
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: PROGRAM_ID, isSigner: false, isWritable: false },
+        {
+          pubkey: getDelegationBuffer(receiptPda, PROGRAM_ID),
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: getDelegationRecord(receiptPda),
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: getDelegationMetadata(receiptPda),
+          isSigner: false,
+          isWritable: true,
+        },
+        { pubkey: DELEGATION_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: MAGIC_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: MAGIC_CONTEXT_ID, isSigner: false, isWritable: true },
+      ],
+      data,
+    });
+
+    const tx = new Transaction().add(ix);
+    const sig = await sendAndConfirmTransaction(
+      baseConn,
+      tx,
+      [trader3],
+      { commitment: 'confirmed', skipPreflight: true },
+    );
+    record('Trader3 RequestSwap', sig);
+
+    // Wait for the post-delegation/post-undelegate chain to close the receipt.
+    let receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    let elapsed = 0;
+    while (receiptInfo !== null && elapsed < 30_000) {
+      await new Promise((r) => setTimeout(r, 2000));
+      elapsed += 2000;
+      receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    }
+    expect(receiptInfo, 'swap receipt should be closed').to.equal(null);
+
+    const t3BaseAfter = BigInt(
+      (await baseConn.getTokenAccountBalance(trader3Base)).value.amount,
+    );
+    const t3QuoteAfter = BigInt(
+      (await baseConn.getTokenAccountBalance(trader3Quote)).value.amount,
+    );
+    const baseGained = t3BaseAfter - t3BaseBefore;
+    const quoteSpent = t3QuoteBefore - t3QuoteAfter;
+    console.log(
+      `  swap result: trader3 gained ${baseGained} base, spent ${quoteSpent} quote in ~${elapsed / 1000}s`,
+    );
+
+    // At price 1.0 with a 1B base resting ask, swapping 1B quote should
+    // fill exactly: 1B base out, 1B quote in.
+    expect(baseGained > 0n, 'trader3 should have received base').to.equal(true);
+    expect(baseGained >= SWAP_MIN_OUT_BASE, 'output should meet min_out').to
+      .equal(true);
+    // Net quote spent <= input (refund kicks in for any unconsumed input)
+    expect(quoteSpent <= SWAP_INPUT_QUOTE, 'quote spent should not exceed input')
+      .to.equal(true);
+  });
 });

@@ -296,6 +296,63 @@ pub enum ManifestInstruction {
     #[account(5, name = "mint", desc = "Mint being withdrawn")]
     #[account(6, name = "token_program", desc = "Token program (legacy or 2022)")]
     ExecuteWithdrawalBaseChain = 25,
+
+    /// Phase B swap Path A — step [1]. Base layer, single user signature.
+    /// SPL transfer wallet→input_vault, create SwapReceipt PDA, then
+    /// delegate-with-actions to fire ProcessSwapEr on the ER, which in
+    /// turn schedules ExecuteSwapBaseChain on base. End-to-end one-shot.
+    #[account(0, writable, signer, name = "trader", desc = "Trader / payer")]
+    #[account(1, name = "market", desc = "Market account (expected delegated)")]
+    #[account(2, writable, name = "input_vault", desc = "Input-side market vault (SPL transfer destination)")]
+    #[account(3, writable, name = "output_vault", desc = "Output-side market vault (forwarded to step [3])")]
+    #[account(4, writable, name = "receipt", desc = "SwapReceipt PDA — created + delegated")]
+    #[account(5, writable, name = "trader_token_in", desc = "Trader's input-mint token account")]
+    #[account(6, writable, name = "trader_token_out", desc = "Trader's output-mint token account")]
+    #[account(7, name = "input_mint", desc = "Mint being swapped in")]
+    #[account(8, name = "output_mint", desc = "Mint being swapped out")]
+    #[account(9, name = "system_program", desc = "System program")]
+    #[account(10, name = "token_program", desc = "Token program (legacy or 2022)")]
+    #[account(11, name = "owner_program", desc = "Manifest program (this program)")]
+    #[account(12, writable, name = "delegation_buffer", desc = "Delegation buffer PDA")]
+    #[account(13, writable, name = "delegation_record", desc = "Delegation record PDA")]
+    #[account(14, writable, name = "delegation_metadata", desc = "Delegation metadata PDA")]
+    #[account(15, name = "delegation_program", desc = "MagicBlock delegation program")]
+    #[account(16, name = "magic_program", desc = "MagicBlock program")]
+    #[account(17, writable, name = "magic_context", desc = "MagicBlock context PDA")]
+    RequestSwap = 26,
+
+    /// Phase B swap Path A — step [2]. ER, validator-signed. Matches the
+    /// swap against the delegated book, writes processed_in/out, then
+    /// schedules ExecuteSwapBaseChain.
+    #[account(0, writable, signer, name = "trader", desc = "Trader (action signer)")]
+    #[account(1, writable, name = "market", desc = "Delegated market account")]
+    #[account(2, writable, name = "receipt", desc = "Delegated SwapReceipt PDA")]
+    #[account(3, name = "magic_program", desc = "MagicBlock program")]
+    #[account(4, writable, name = "magic_context", desc = "MagicBlock context PDA")]
+    #[account(5, writable, name = "input_vault", desc = "Forwarded to step [3]")]
+    #[account(6, writable, name = "output_vault", desc = "Forwarded to step [3]")]
+    #[account(7, writable, name = "trader_token_in", desc = "Forwarded to step [3]")]
+    #[account(8, writable, name = "trader_token_out", desc = "Forwarded to step [3]")]
+    #[account(9, name = "input_mint", desc = "Forwarded")]
+    #[account(10, name = "output_mint", desc = "Forwarded")]
+    #[account(11, name = "token_program", desc = "Forwarded")]
+    ProcessSwapEr = 27,
+
+    /// Phase B swap Path A — step [3]. Auto-fired on base as a
+    /// post-undelegate action. Validator-signed. Pays out processed_out
+    /// from output_vault, refunds residual input from input_vault, and
+    /// closes the receipt.
+    #[account(0, writable, name = "trader", desc = "Trader (rent + payout recipient; not a signer)")]
+    #[account(1, name = "market", desc = "Market account")]
+    #[account(2, writable, name = "receipt", desc = "SwapReceipt — will be closed")]
+    #[account(3, writable, name = "input_vault", desc = "Input-side vault (refund source)")]
+    #[account(4, writable, name = "output_vault", desc = "Output-side vault (payout source)")]
+    #[account(5, writable, name = "trader_token_in", desc = "Refund destination")]
+    #[account(6, writable, name = "trader_token_out", desc = "Payout destination")]
+    #[account(7, name = "input_mint", desc = "Input mint")]
+    #[account(8, name = "output_mint", desc = "Output mint")]
+    #[account(9, name = "token_program", desc = "Token program (legacy or 2022)")]
+    ExecuteSwapBaseChain = 28,
 }
 
 impl ManifestInstruction {
@@ -306,7 +363,7 @@ impl ManifestInstruction {
 
 #[test]
 fn test_instruction_serialization() {
-    let num_instructions: u8 = 25;
+    let num_instructions: u8 = 28;
     for i in 0..=255 {
         let instruction: ManifestInstruction = match ManifestInstruction::try_from(i) {
             Ok(j) => {

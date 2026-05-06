@@ -78,6 +78,12 @@ pub enum ManifestError {
     DepositAlreadyProcessed = 35,
     #[error("Deposit not yet processed on the ER")]
     DepositNotProcessed = 36,
+    #[error("Mint does not match either side of the market for withdrawal")]
+    InvalidWithdrawalMint = 37,
+    #[error("Withdrawal receipt is not at the expected PDA")]
+    InvalidWithdrawalReceiptPubkey = 38,
+    #[error("Withdrawal already processed on the ER")]
+    WithdrawalAlreadyProcessed = 39,
 }
 
 impl From<ManifestError> for ProgramError {

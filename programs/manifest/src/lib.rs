@@ -25,12 +25,15 @@ use program::{
     commit_market::process_commit_market, create_market::process_create_market,
     create_session_token::process_create_session_token,
     delegate_market::process_delegate_market, deposit::process_deposit,
+    execute_withdrawal_base_chain::process_execute_withdrawal_base_chain,
     expand_market::process_expand_market, global_add_trader::process_global_add_trader,
     global_clean::process_global_clean, global_create::process_global_create,
     global_deposit::process_global_deposit, global_evict::process_global_evict,
     global_withdraw::process_global_withdraw,
-    process_deposit_er::process_process_deposit_er, process_swap,
+    process_deposit_er::process_process_deposit_er,
+    process_withdrawal_er::process_process_withdrawal_er, process_swap,
     request_deposit::process_request_deposit,
+    request_withdrawal::process_request_withdrawal,
     revoke_session_token::process_revoke_session_token,
     undelegate_market::process_undelegate_market, withdraw::process_withdraw, ManifestInstruction,
 };
@@ -207,6 +210,15 @@ pub fn process_instruction(
         }
         ManifestInstruction::CloseDepositReceipt => {
             process_close_deposit_receipt(program_id, accounts, data)?;
+        }
+        ManifestInstruction::RequestWithdrawal => {
+            process_request_withdrawal(program_id, accounts, data)?;
+        }
+        ManifestInstruction::ProcessWithdrawalEr => {
+            process_process_withdrawal_er(program_id, accounts, data)?;
+        }
+        ManifestInstruction::ExecuteWithdrawalBaseChain => {
+            process_execute_withdrawal_base_chain(program_id, accounts, data)?;
         }
     }
 

@@ -592,4 +592,124 @@ describe('Manifest × MagicBlock — devnet E2E', function () {
       `  vault delta: +${depositAmount}; receipt closed in ~${elapsed / 1000}s`,
     );
   });
+
+  // ── Phase 9: withdrawal Path A ───────────────────────────────────────
+  // Same single-tx pattern as deposit, but in reverse.
+  //   user -> RequestWithdrawal (base): create receipt + delegate-with-actions
+  //   validator -> ProcessWithdrawalEr (ER): debit seat, schedule
+  //                ExecuteWithdrawalBaseChain post-undelegate action
+  //   validator -> ExecuteWithdrawalBaseChain (base): SPL transfer
+  //                market_vault -> trader_token, close receipt
+
+  function getWithdrawalReceiptAddress(
+    market_: PublicKey,
+    trader: PublicKey,
+    mint: PublicKey,
+  ): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [
+        Buffer.from('withdraw_receipt'),
+        market_.toBuffer(),
+        trader.toBuffer(),
+        mint.toBuffer(),
+      ],
+      PROGRAM_ID,
+    )[0];
+  }
+
+  it('RequestWithdrawal — single user signature, full flow auto-fires', async () => {
+    // Market should still be delegated from the previous test.
+    expect(await isDelegated(baseConn, market), 'market must be delegated')
+      .to.equal(true);
+
+    const withdrawAmount = 10_000_000n; // 10 USDC
+
+    const quoteVault = getVaultAddress(market, quoteMint);
+    const vaultAccBefore = await baseConn.getTokenAccountBalance(quoteVault);
+    const traderAccBefore = await baseConn.getTokenAccountBalance(traderQuoteAta);
+    const vaultBalBefore = BigInt(vaultAccBefore.value.amount);
+    const traderBalBefore = BigInt(traderAccBefore.value.amount);
+
+    const receiptPda = getWithdrawalReceiptAddress(
+      market,
+      payer.publicKey,
+      quoteMint,
+    );
+
+    const data = Buffer.alloc(1 + 8);
+    data.writeUInt8(23, 0); // RequestWithdrawal discriminator
+    data.writeBigUInt64LE(withdrawAmount, 1);
+
+    const ix = new (require('@solana/web3.js').TransactionInstruction)({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: market, isSigner: false, isWritable: false },
+        { pubkey: receiptPda, isSigner: false, isWritable: true },
+        { pubkey: quoteMint, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: PROGRAM_ID, isSigner: false, isWritable: false },
+        {
+          pubkey: getDelegationBuffer(receiptPda, PROGRAM_ID),
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: getDelegationRecord(receiptPda),
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: getDelegationMetadata(receiptPda),
+          isSigner: false,
+          isWritable: true,
+        },
+        { pubkey: DELEGATION_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: MAGIC_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: MAGIC_CONTEXT_ID, isSigner: false, isWritable: true },
+        { pubkey: quoteVault, isSigner: false, isWritable: true },
+        { pubkey: traderQuoteAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      ],
+      data,
+    });
+
+    const tx = new Transaction().add(ix);
+    const sig = await sendAndConfirmTransaction(baseConn, tx, [payer], {
+      commitment: 'confirmed',
+      skipPreflight: true,
+    });
+    record('RequestWithdrawal', sig);
+
+    // Wait for the post-delegation action chain to land back on base.
+    let receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    let elapsed = 0;
+    const deadline = 30_000;
+    while (receiptInfo !== null && elapsed < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      elapsed += 2000;
+      receiptInfo = await baseConn.getAccountInfo(receiptPda);
+    }
+
+    expect(
+      receiptInfo,
+      'receipt should be closed by ExecuteWithdrawalBaseChain callback',
+    ).to.equal(null);
+
+    const vaultAccAfter = await baseConn.getTokenAccountBalance(quoteVault);
+    const traderAccAfter = await baseConn.getTokenAccountBalance(traderQuoteAta);
+    const vaultDelta =
+      BigInt(vaultAccAfter.value.amount) - vaultBalBefore;
+    const traderDelta =
+      BigInt(traderAccAfter.value.amount) - traderBalBefore;
+
+    console.log(
+      `  vault delta: ${vaultDelta}; trader delta: +${traderDelta}; receipt closed in ~${elapsed / 1000}s`,
+    );
+
+    // ER may have clamped the withdrawal to seat balance; we expect the
+    // negative-of-vault to equal the trader delta and to be positive.
+    expect(vaultDelta).to.equal(-traderDelta);
+    expect(traderDelta > 0n, 'trader should have received tokens').to.equal(true);
+  });
 });

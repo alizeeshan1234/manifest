@@ -249,6 +249,53 @@ pub enum ManifestInstruction {
     #[account(0, writable, name = "trader", desc = "Trader (rent recipient; not a signer)")]
     #[account(1, writable, name = "receipt", desc = "DepositReceipt — will be closed")]
     CloseDepositReceipt = 22,
+
+    /// Phase 9 withdrawal Path A — step [1]. Base layer, single user signature.
+    /// Creates a WithdrawalReceipt PDA + delegate-with-actions to fire
+    /// ProcessWithdrawalEr on the ER, which schedules ExecuteWithdrawalBaseChain
+    /// on base. End-to-end one-shot.
+    #[account(0, writable, signer, name = "trader", desc = "Trader / payer")]
+    #[account(1, name = "market", desc = "Market account (expected delegated)")]
+    #[account(2, writable, name = "receipt", desc = "WithdrawalReceipt PDA — will be created + delegated")]
+    #[account(3, name = "mint", desc = "Mint being withdrawn")]
+    #[account(4, name = "system_program", desc = "System program")]
+    #[account(5, name = "owner_program", desc = "Manifest program (this program)")]
+    #[account(6, writable, name = "delegation_buffer", desc = "Delegation buffer PDA")]
+    #[account(7, writable, name = "delegation_record", desc = "Delegation record PDA")]
+    #[account(8, writable, name = "delegation_metadata", desc = "Delegation metadata PDA")]
+    #[account(9, name = "delegation_program", desc = "MagicBlock delegation program")]
+    #[account(10, name = "magic_program", desc = "MagicBlock program (used by post-delegation action)")]
+    #[account(11, writable, name = "magic_context", desc = "MagicBlock context")]
+    #[account(12, writable, name = "market_vault", desc = "Market vault (passed through to step [3])")]
+    #[account(13, writable, name = "trader_token", desc = "Trader token account (passed through to step [3])")]
+    #[account(14, name = "token_program", desc = "Token program (passed through)")]
+    RequestWithdrawal = 23,
+
+    /// Phase 9 withdrawal Path A — step [2]. ER, validator-signed via
+    /// post-delegation action. Debits seat, schedules
+    /// ExecuteWithdrawalBaseChain post-undelegate action.
+    #[account(0, writable, signer, name = "trader", desc = "Trader (action signer)")]
+    #[account(1, writable, name = "market", desc = "Delegated market account")]
+    #[account(2, writable, name = "receipt", desc = "Delegated WithdrawalReceipt PDA")]
+    #[account(3, name = "magic_program", desc = "MagicBlock program")]
+    #[account(4, writable, name = "magic_context", desc = "MagicBlock context PDA")]
+    #[account(5, writable, name = "market_vault", desc = "Market vault (forwarded to step [3])")]
+    #[account(6, writable, name = "trader_token", desc = "Trader token account (forwarded to step [3])")]
+    #[account(7, name = "mint", desc = "Mint (forwarded to step [3])")]
+    #[account(8, name = "token_program", desc = "Token program (forwarded to step [3])")]
+    ProcessWithdrawalEr = 24,
+
+    /// Phase 9 withdrawal Path A — step [3]. Auto-fired on base as a
+    /// post-undelegate action. Validator-signed. SPL transfer
+    /// market_vault -> trader_token, then close the receipt.
+    #[account(0, writable, name = "trader", desc = "Trader (rent recipient; not a signer)")]
+    #[account(1, name = "market", desc = "Market account")]
+    #[account(2, writable, name = "receipt", desc = "WithdrawalReceipt — will be closed")]
+    #[account(3, writable, name = "market_vault", desc = "Market vault (SPL transfer source)")]
+    #[account(4, writable, name = "trader_token", desc = "Trader token account (SPL transfer dest)")]
+    #[account(5, name = "mint", desc = "Mint being withdrawn")]
+    #[account(6, name = "token_program", desc = "Token program (legacy or 2022)")]
+    ExecuteWithdrawalBaseChain = 25,
 }
 
 impl ManifestInstruction {
@@ -259,7 +306,7 @@ impl ManifestInstruction {
 
 #[test]
 fn test_instruction_serialization() {
-    let num_instructions: u8 = 22;
+    let num_instructions: u8 = 25;
     for i in 0..=255 {
         let instruction: ManifestInstruction = match ManifestInstruction::try_from(i) {
             Ok(j) => {
